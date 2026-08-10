@@ -1,0 +1,17 @@
+# Secrets / local config — never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+azure-native/bicep/main.parameters.json
+
+# Benchmark run output
+benchmark-integration/runs/
+benchmark-integration/report/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
