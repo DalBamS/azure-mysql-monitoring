@@ -16,13 +16,14 @@ Monitoring built from **Azure Monitor** telemetry for Azure Database for MySQL F
 
 ```mermaid
 flowchart LR
-    SRV["Flexible Server (MySQL 8.4)"] --> DS["Diagnostic settings"]
+    SRV["Flexible Server (MySQL 8.4)"] --> DS["Diagnostic settings<br/>Slow + Audit logs only"]
     SRV --> PM["Platform metrics"]
     DS --> LAW["Log Analytics workspace"]
     PM --> LAW
     LAW --> KQL["kql/"]
     KQL --> WB["workbooks/"]
     KQL --> AL["alerts/"]
+    LAW --> GRF["../grafana/<br/>(Azure Monitor data source)"]
 ```
 
 ## Scope and limitations
@@ -32,6 +33,23 @@ flowchart LR
 - **Premium SSD v2 is in preview.** Platform metrics and diagnostic categories may be incomplete
   or missing for v2-backed servers. For benchmark runs, treat `mysql-internal/` as the primary
   data source and use this layer as supplementary context.
+- **This layer is the slow safety net, not the real-time view.** Platform metrics and diagnostic
+  logs typically land in Log Analytics 2–5 minutes after the fact. Second-level detection is the
+  job of Layer 2 streaming into [`../adx/`](../adx/).
+- **There is no error-log diagnostic category.** Flexible Server exposes only `MySQL Audit Logs`
+  and `MySQL Slow Logs`, both landing in the `AzureDiagnostics` table. MySQL error-log content is
+  reachable only through `performance_schema.error_log` in Layer 2.
+
+## What this layer is uniquely good for
+
+Layer 2 cannot see any of these, so this layer is not optional:
+
+| Signal | Why only Azure Monitor has it |
+|---|---|
+| Host CPU / memory / storage IOPS | Hypervisor-level, invisible from inside MySQL |
+| Storage throttling and burst credits | Premium SSD v1/v2 tier behaviour |
+| Failover, restart, maintenance events | Control-plane, via `AzureActivity` |
+| Collector-down backstop | Survives when the self-built collector dies |
 
 ## Configuration
 

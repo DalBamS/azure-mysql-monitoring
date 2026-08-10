@@ -1,21 +1,43 @@
 # grafana/datasources/ — data source provisioning
 
-Grafana data source definitions (provisioning YAML). Two data sources back every dashboard, one per
-monitoring layer.
+Data source definitions for **Azure Managed Grafana**. Two data sources back every dashboard.
+
+> **Tier requirement:** the Azure Data Explorer data source is available on the Managed Grafana
+> **Standard** tier. It is not offered on the deprecated Essential tier.
 
 ## Expected contents
 
 | File | Purpose |
 |---|---|
-| `azure-monitor.yaml` | Layer 1 — Azure Monitor / Log Analytics |
-| `mysql.yaml` | Layer 2 — the collector's metrics table on MySQL 8.4 |
+| `azure-data-explorer.yaml` | **Primary** — the unified metrics + logs store |
+| `azure-monitor.yaml` | Layer 1 — platform metrics, plus Slow/Audit logs in Log Analytics |
 
-## 1. Azure Monitor (Layer 1)
+## 1. Azure Data Explorer (primary)
 
-Queries platform metrics and Log Analytics logs. Reuse the KQL in
-[`../../azure-native/kql/`](../../azure-native/kql/) rather than writing divergent copies.
+Reads everything the collector produces: numeric metrics, `performance_schema.error_log` events,
+and benchmark run metadata. This is the real-time path and the long-term store.
 
-Prefer **Azure Managed Grafana with a managed identity** — then no client secret exists at all:
+```yaml
+apiVersion: 1
+datasources:
+  - name: ADX
+    type: grafana-azure-data-explorer-datasource
+    uid: adx
+    jsonData:
+      azureCredentials:
+        authType: msi          # Managed Grafana's managed identity — no secret
+      clusterUrl: ${ADX_CLUSTER_URI}
+      defaultDatabase: ${ADX_DATABASE}
+      dataConsistency: strongconsistency
+```
+
+Grant that managed identity the **`Viewer`** role on the ADX database — read-only, assigned in
+[`../../adx/bicep/`](../../adx/bicep/). Nothing else is needed, and no credential is stored.
+
+## 2. Azure Monitor (Layer 1)
+
+Platform metrics and the two resource log categories Flexible Server actually emits —
+**`MySQL Audit Logs`** and **`MySQL Slow Logs`**, both landing in the `AzureDiagnostics` table.
 
 ```yaml
 apiVersion: 1
@@ -24,63 +46,44 @@ datasources:
     type: grafana-azure-monitor-datasource
     uid: azmon
     jsonData:
-      azureAuthType: msi          # managed identity — no secret to store
+      azureAuthType: msi
       subscriptionId: ${AZURE_SUBSCRIPTION_ID}
       logAnalyticsDefaultWorkspace: ${LOG_ANALYTICS_WORKSPACE_ID}
 ```
 
-If managed identity is unavailable, inject the client secret from a vault at runtime via
-`${...}` expansion. **Never commit a secret value.**
+**There is no error-log category** in Flexible Server diagnostic settings. Error-log data comes only
+from the ADX data source, fed by the collector reading `performance_schema.error_log`.
 
-## 2. MySQL (Layer 2)
+## Which data source for which panel
 
-Reads the metrics rows written by [`../../mysql-internal/collector/`](../../mysql-internal/collector/).
-This is the **primary source during benchmark runs**, because Premium SSD v2 is in preview and its
-Azure platform telemetry may be incomplete.
-
-```yaml
-apiVersion: 1
-datasources:
-  - name: MySQLMetrics
-    type: mysql
-    uid: mysqlmetrics
-    url: ${MYSQL_HOST}:3306
-    user: ${MYSQL_USER}
-    database: ${MYSQL_DB}
-    jsonData:
-      tlsAuth: true
-      sslmode: require            # Azure enforces require_secure_transport=ON
-      timezone: UTC               # rows are stored as UTC
-    secureJsonData:
-      password: ${MYSQL_PASSWORD} # expanded at runtime, never committed
-```
-
-### MySQL 8.4 notes
-
-- Grafana's MySQL driver supports **`caching_sha2_password`**, the 8.4 default. Do **not** try to
-  move the monitoring user to `mysql_native_password` — it is disabled by default in 8.4.
-- Azure sets `require_secure_transport=ON`, so **TLS is mandatory**. Never set an
-  SSL-disabled/skip-verify mode; a plaintext connection is rejected by the server anyway.
-- Use a **read-only** monitoring user; this data source must never be able to write.
-- Keep `timezone: UTC` aligned with the collector, which stores UTC ISO-8601 timestamps. A mismatch
-  shifts every panel and silently invalidates a v1 vs v2 comparison.
+| Panel | Data source | Why |
+|---|---|---|
+| Live health, alerting | ADX | Seconds-latency streaming ingestion |
+| Benchmark v1 vs v2 | ADX | Only source with complete v2 preview coverage |
+| Error log | ADX | Not available via Azure diagnostics at all |
+| Slow / audit logs | Azure Monitor | Already collected by diagnostic settings; no need to duplicate |
+| Storage, CPU, host-level | Azure Monitor | Platform view outside the engine |
 
 ## Rules
 
-- **Never hardcode credentials, hostnames, or workspace IDs.** Use `${ENV_VAR}` expansion only.
+- **Never hardcode credentials, cluster URIs, or workspace IDs.** Use `${ENV_VAR}` expansion, and
+  prefer managed identity so there is no secret to expand in the first place.
 - Keep `uid` values stable — dashboards in [`../dashboards/`](../dashboards/) reference them.
+- Both identities are **read-only**. Ingestion rights belong to the collector identity, never to
+  Grafana.
 - Data sources are provisioned from this repo, not created by hand in the UI.
 
 ## Configuration
 
-All values come from environment variables:
-
 | Variable | Description |
 |---|---|
-| `MYSQL_HOST` | Flexible Server FQDN, e.g. `<name>.mysql.database.azure.com` |
-| `MYSQL_USER` | Read-only monitoring user |
-| `MYSQL_PASSWORD` | Password (never logged, never committed) |
-| `MYSQL_DB` | Database holding the collector's metrics table |
-| `RUN_ID` | Benchmark run identifier, surfaced to dashboards as `$run_id` |
+| `ADX_CLUSTER_URI` | `https://<cluster>.<region>.kusto.windows.net` |
+| `ADX_DATABASE` | Database holding `MysqlMetrics` / `MysqlEvents` |
 | `AZURE_SUBSCRIPTION_ID` | Subscription for the Azure Monitor data source |
-| `LOG_ANALYTICS_WORKSPACE_ID` | Default Log Analytics workspace |
+| `LOG_ANALYTICS_WORKSPACE_ID` | Workspace receiving Slow/Audit logs |
+| `RUN_ID` | Benchmark run identifier, surfaced to dashboards as `$run_id` |
+
+MySQL connection variables (`MYSQL_HOST`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DB`) are **not**
+used here. Grafana never connects to MySQL directly; it reads what the collector already ingested
+into ADX. Those variables belong to
+[`../../mysql-internal/collector/`](../../mysql-internal/collector/).

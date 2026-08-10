@@ -13,9 +13,22 @@ covering production monitoring for gaming customers.
 | `connections-exhausted.alert.json` | `max_connections` pressure / aborted connects |
 | `replica-lag.alert.json` | Replication lag |
 | `slow-query-spike.alert.json` | Log-based alert on slow query rate |
+| `server-unavailable.alert.json` | Platform-level availability backstop |
 
 Rules are authored here and **deployed via Bicep** from [`../bicep/`](../bicep/) — this directory
 holds the definitions and documentation, not portal-created resources.
+
+## Where alerting is split
+
+| Concern | Owner |
+|---|---|
+| Host CPU / memory / storage / IOPS | **This directory** (Azure Monitor) |
+| Failover, restart, availability | **This directory** (platform signals) |
+| MySQL-internal counters, error-log events | [`../../grafana/`](../../grafana/) over ADX |
+| Collector liveness (`collector_heartbeat`) | [`../../grafana/`](../../grafana/), backstopped here |
+
+The backstop matters: if the collector process dies, ADX-based alerts go quiet along with it. A
+platform alert here is the only thing that still fires.
 
 ## Conventions
 
@@ -24,6 +37,8 @@ holds the definitions and documentation, not portal-created resources.
 - Every rule documents: signal, threshold, evaluation window, severity, and action group.
 - Action groups (email, webhook, on-call integration) are parameterised — never commit real
   endpoints, phone numbers, or webhook secrets.
+- **Expect 2–5 minutes of latency.** Diagnostic logs and platform metrics are not real-time; do not
+  set an evaluation window shorter than the ingestion delay or the rule will flap on empty windows.
 
 ## Benchmark vs production
 

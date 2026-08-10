@@ -20,31 +20,30 @@ flowchart TB
     end
 
     subgraph L1["Layer 1 — azure-native/ (platform telemetry)"]
-        DIAG["Diagnostic settings<br/>(Bicep IaC)"]
+        DIAG["Diagnostic settings<br/>Slow + Audit logs only"]
         LAW["Log Analytics workspace"]
         KQL["kql/ — reusable queries"]
-        WB["workbooks/ — dashboards"]
-        AL["alerts/ — alert rules"]
+        WB["workbooks/ — portal view"]
+        AL["alerts/ — 2-5 min safety net"]
     end
 
     subgraph L2["Layer 2 — mysql-internal/ (in-server telemetry)"]
-        COL["collector/ — Python 3.11+ poller<br/>TLS-only connection"]
-        SQL["sql/ — SHOW GLOBAL STATUS<br/>+ performance_schema"]
-        OUT["Metric rows<br/>UTC ISO-8601 + RUN_ID"]
+        COL["collector/ — Python 3.11+<br/>TLS-only, prod 10s / bench 1-5s"]
+        SQL["sql/ — SHOW GLOBAL STATUS<br/>+ performance_schema.error_log"]
     end
 
-    subgraph BI["benchmark-integration/"]
-        JOIN["Join on time axis via RUN_ID"]
-        REP["v1 vs v2 comparison report"]
+    subgraph ST["adx/ — unified store"]
+        RAW["MysqlMetrics / MysqlEvents<br/>raw, 30 days"]
+        MV["MysqlMetrics1m rollup<br/>395 days"]
+        RAW --> MV
     end
 
     subgraph L3["Layer 3 — grafana/ (final view)"]
-        DSA["Azure Monitor data source"]
-        DSM["MySQL data source (TLS)"]
-        DASH["Dashboards<br/>$run_id template variable"]
+        DASH["Managed Grafana (Standard)<br/>$run_id variable, 10s refresh"]
+        GAL["Alert rules<br/>10-30s evaluation"]
     end
 
-    ENV["Environment variables<br/>MYSQL_HOST / MYSQL_USER<br/>MYSQL_PASSWORD / MYSQL_DB / RUN_ID"]
+    ENV["Environment variables<br/>MYSQL_* / ADX_* / RUN_ID"]
 
     SRV1 --> DIAG
     SRV2 -. "metrics may be incomplete in preview" .-> DIAG
@@ -57,45 +56,71 @@ flowchart TB
     SRV2 --> COL
     SQL --> COL
     ENV --> COL
-    COL --> OUT
 
-    OUT ==> |primary source during benchmarks| JOIN
-    LAW --> |supplementary| JOIN
-    JOIN --> REP
+    COL ==> |"hot path — streaming (~seconds)"| RAW
+    COL --> |"cold path — JSONL, queued"| RAW
 
-    LAW --> DSA
-    OUT --> DSM
-    DSA --> DASH
-    DSM ==> |primary during benchmarks| DASH
+    RAW ==> |primary| DASH
+    MV --> DASH
+    LAW --> |supplementary| DASH
+    DASH --> GAL
+
+    RAW --> BI["benchmark-integration/<br/>v1 vs v2 report via RUN_ID"]
 ```
 
-### Why two layers
+### Why two collection layers
 
 | | Layer 1 — `azure-native/` | Layer 2 — `mysql-internal/` |
 |---|---|---|
 | Source | Azure Monitor, diagnostic settings, Log Analytics | Direct MySQL connection |
 | Tooling | Bicep, KQL, Workbooks, alert rules | Python collector, plain SQL |
-| Strength | Platform-level view, alerting, long retention | High-resolution engine internals |
+| Logs available | Slow + Audit only | **Error log** (via `performance_schema.error_log`) |
+| Latency | 2–5 minutes | Seconds |
 | Benchmark role | Supplementary | **Primary** |
 
 **Premium SSD v2 servers are in preview**, so Azure platform metrics and diagnostic logs may be
 incomplete for them. During benchmark runs, Layer 2 is the authoritative data source.
 
+Flexible Server exposes only two resource log categories — `MySQL Audit Logs` and `MySQL Slow Logs`
+— and **no error-log category**. Layer 2 is the only way to get error-log data.
+
+### Storage — Azure Data Explorer
+
+[`adx/`](adx/) is the **single unified store** for both numeric metrics and text log events, with
+two ingestion paths writing to the same tables:
+
+| Path | Latency | Used for |
+|---|---|---|
+| Streaming ingestion (hot) | seconds | Live production monitoring and alerting |
+| Queued ingestion (cold) | batching window | JSONL replay, backfill, benchmark archives |
+
+Retention is tiered — raw tables expire in 30 days while materialized rollups are kept for
+395 days — so growing log volume does not grow cost linearly.
+
 ### Layer 3 — Grafana is the final view
 
-[`grafana/`](grafana/) is the single surface that renders **both** collection layers on one time
-axis, via an Azure Monitor data source and a MySQL data source. It collects nothing itself.
+[`grafana/`](grafana/) runs on **Azure Managed Grafana (Standard tier)** and renders ADX and Azure
+Monitor on one time axis. It collects and stores nothing.
 
-- Dashboards are JSON committed here and provisioned — not UI-only edits.
+- Both data sources use **managed identity** and are **read-only** — no secrets exist.
 - **`$run_id`** is a template variable, so a Premium SSD v1 run and a v2 run can be compared
   without editing panels.
-- Grafana reads the collector's **persisted metrics table**, not `SHOW GLOBAL STATUS` directly —
-  a live `SHOW` returns a snapshot that cannot be graphed.
-- The MySQL data source uses TLS `require` (Azure enforces `require_secure_transport=ON`) and
-  `caching_sha2_password`, the MySQL 8.4 default.
+- Grafana never connects to MySQL directly; a live `SHOW GLOBAL STATUS` is a snapshot with no time
+  axis.
 
-`azure-native/workbooks/` remains the Azure-native, portal-side view; Grafana is the primary
-operator-facing dashboard.
+### Real-time budget
+
+| Stage | Contribution |
+|---|---|
+| Collector poll interval (10s) | ~5s average |
+| ADX streaming ingestion | ~5s |
+| Grafana alert evaluation (30s) | ~15s |
+| **End-to-end detection** | **~25–45s** |
+
+Azure Monitor platform alerts land in the 2–5 minute range, so the fast path is Layer 2 → ADX →
+Grafana. Layer 1 alerting remains as an independent safety net that still works if the collector
+dies — and a **`collector_heartbeat`** rule fires when collector data simply stops, since a
+flatlined chart otherwise reads as healthy.
 
 ## Repository layout
 
@@ -109,9 +134,13 @@ operator-facing dashboard.
 | [`mysql-internal/`](mysql-internal/) | In-server telemetry (Layer 2) |
 | [`mysql-internal/collector/`](mysql-internal/collector/) | Python collector |
 | [`mysql-internal/sql/`](mysql-internal/sql/) | `SHOW GLOBAL STATUS` / `performance_schema` queries |
+| [`adx/`](adx/) | **Unified store** for metrics and log events |
+| [`adx/bicep/`](adx/bicep/) | Cluster, database, identities and role assignments |
+| [`adx/tables/`](adx/tables/) | Table DDL, ingestion mappings, materialized views |
+| [`adx/policies/`](adx/policies/) | Streaming, batching, retention and caching policies |
 | [`grafana/`](grafana/) | Final monitoring view (Layer 3) |
 | [`grafana/dashboards/`](grafana/dashboards/) | Dashboard JSON models |
-| [`grafana/datasources/`](grafana/datasources/) | Azure Monitor + MySQL data source provisioning |
+| [`grafana/datasources/`](grafana/datasources/) | ADX + Azure Monitor data source provisioning |
 | [`grafana/provisioning/`](grafana/provisioning/) | Providers, folders, deployment wiring |
 | [`benchmark-integration/`](benchmark-integration/) | Joins benchmark output with collector metrics |
 
@@ -132,13 +161,21 @@ Nothing is hardcoded. All connection information is supplied via environment var
 | `MYSQL_USER` | MySQL user with `PROCESS` / `SELECT` on `performance_schema` |
 | `MYSQL_PASSWORD` | Password (never logged, never committed) |
 | `MYSQL_DB` | Default database/schema |
-| `RUN_ID` | Identifier tagged onto every metric row, used to join benchmark and collector data |
+| `MYSQL_TIER` | `premium-ssd-v1` / `premium-ssd-v2`, stamped on every row |
+| `RUN_ID` | Identifier tagged onto every row, used to join benchmark and collector data |
+| `ADX_CLUSTER_URI` | `https://<cluster>.<region>.kusto.windows.net` |
+| `ADX_INGEST_URI` | `https://ingest-<cluster>.<region>.kusto.windows.net` |
+| `ADX_DATABASE` | Database holding `MysqlMetrics` / `MysqlEvents` |
+
+Azure services authenticate with **managed identity**, so ADX and Azure Monitor need no secret at
+all. `MYSQL_PASSWORD` is the only credential in the system.
 
 ```bash
 export MYSQL_HOST="<server>.mysql.database.azure.com"
 export MYSQL_USER="<user>"
 export MYSQL_PASSWORD="<password>"
 export MYSQL_DB="<database>"
+export MYSQL_TIER="premium-ssd-v2"
 export RUN_ID="ssdv2-2026-08-10-01"
 ```
 
@@ -149,13 +186,16 @@ $env:MYSQL_HOST = "<server>.mysql.database.azure.com"
 $env:MYSQL_USER = "<user>"
 $env:MYSQL_PASSWORD = "<password>"
 $env:MYSQL_DB     = "<database>"
+$env:MYSQL_TIER   = "premium-ssd-v2"
 $env:RUN_ID       = "ssdv2-2026-08-10-01"
 ```
 
 ## Conventions
 
-- **Python 3.11+**, dependencies limited to `mysql-connector-python` (or `PyMySQL`). **No ORM.**
-- **All timestamps are UTC ISO-8601.**
-- **Every metric row carries `RUN_ID`** so benchmark results and collector output can be joined
-  on the time axis.
+- **Python 3.11+**, core dependencies limited to `mysql-connector-python` (or `PyMySQL`). The ADX
+  sink is the single sanctioned extra, isolated in `requirements-adx.txt`. **No ORM.**
+- **All timestamps are UTC ISO-8601.** Kusto `datetime` is always UTC, so a naive or local timestamp
+  silently shifts every dashboard.
+- **Every row carries `RUN_ID`** so benchmark results and collector output can be joined on the time
+  axis; production rows use a sentinel such as `prod`.
 - Credentials are never hardcoded — see the table above.

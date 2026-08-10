@@ -10,6 +10,9 @@ Server, independent of Azure Monitor.
 | [`collector/`](collector/) | Python 3.11+ collector that polls the server on an interval |
 | [`sql/`](sql/) | `SHOW GLOBAL STATUS` and `performance_schema` query definitions |
 
+Collected rows land in [`../adx/`](../adx/), the unified store that
+[`../grafana/`](../grafana/) reads.
+
 ## Why this layer is primary during benchmarks
 
 **Premium SSD v2 servers are in preview**, so Azure platform metrics and diagnostic logs may be
@@ -17,16 +20,23 @@ incomplete for them. Layer 2 talks to the engine directly, so it produces a cons
 both Premium SSD v1 and v2. When Layer 1 and Layer 2 disagree during a benchmark run, Layer 2 wins
 and the discrepancy is recorded.
 
+It is also the **only** source of MySQL error-log data: Flexible Server's diagnostic settings expose
+just `MySQL Audit Logs` and `MySQL Slow Logs`, with no error-log category. And it is the **real-time
+path** — seconds of latency versus the 2–5 minutes of Azure Monitor platform alerts.
+
 ## Data flow
 
 ```mermaid
 flowchart LR
-    ENV["Env vars<br/>MYSQL_HOST / MYSQL_USER<br/>MYSQL_PASSWORD / MYSQL_DB / RUN_ID"] --> COL
-    SQL["sql/ query definitions"] --> COL["collector/ (TLS-only)"]
+    ENV["Env vars<br/>MYSQL_* / ADX_* / RUN_ID"] --> COL
+    SQL["sql/ query definitions"] --> COL["collector/ (TLS-only)<br/>prod 10s / bench 1-5s"]
     SRV["MySQL 8.4 Flexible Server"] --> COL
-    COL --> OUT["Metric rows<br/>UTC ISO-8601 + RUN_ID"]
-    OUT --> BI["../benchmark-integration/"]
-    OUT --> GF["../grafana/ (final view)"]
+
+    COL ==> |"hot path — streaming (~seconds)"| ADX["../adx/ — unified store"]
+    COL --> |"cold path — JSONL, queued"| ADX
+
+    ADX --> GF["../grafana/ (final view)"]
+    ADX --> BI["../benchmark-integration/"]
 ```
 
 ## MySQL 8.4 requirements
@@ -47,14 +57,21 @@ Nothing is hardcoded. All connection info comes from environment variables:
 | `MYSQL_USER` | MySQL user with `SELECT` on `performance_schema` and `PROCESS` |
 | `MYSQL_PASSWORD` | Password (never logged, never committed) |
 | `MYSQL_DB` | Default database/schema |
-| `RUN_ID` | Tagged onto every emitted metric row |
+| `MYSQL_TIER` | `premium-ssd-v1` / `premium-ssd-v2`, stamped on every row |
+| `RUN_ID` | Tagged onto every emitted row; use a sentinel such as `prod` outside benchmarks |
+| `ADX_INGEST_URI` | ADX ingestion endpoint (ADX sink only) |
+| `ADX_DATABASE` | Target ADX database (ADX sink only) |
+
+The ADX sink authenticates with a **managed identity**, so `MYSQL_PASSWORD` is the only credential.
 
 ## Conventions
 
-- **Python 3.11+**, dependencies limited to `mysql-connector-python` (or `PyMySQL`). **No ORM.**
+- **Python 3.11+**, core dependencies limited to `mysql-connector-python` (or `PyMySQL`). The ADX
+  sink is the single sanctioned extra, isolated in `requirements-adx.txt`. **No ORM.**
 - **All timestamps are UTC ISO-8601.**
-- **Every metric row carries `RUN_ID`**, so collector output joins with benchmark results on the
-  time axis.
+- **Every row carries `RUN_ID`**, so collector output joins with benchmark results on the time axis.
+- Emit `collector_heartbeat` every cycle — a dead collector produces a flatline that otherwise reads
+  as healthy.
 
 ## Required grants
 

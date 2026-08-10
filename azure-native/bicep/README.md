@@ -14,6 +14,25 @@ no hand-authored ARM JSON, no Terraform.
 | `alertRules.bicep` | Metric/log alert rules and action groups |
 | `main.parameters.example.json` | **Example** parameters — placeholders only |
 
+This directory provisions **Layer 1 only**. The ADX cluster lives in
+[`../../adx/bicep/`](../../adx/bicep/) and Managed Grafana in
+[`../../grafana/provisioning/`](../../grafana/provisioning/), so each layer can be deployed and
+rolled back independently.
+
+## Diagnostic categories
+
+`diagnosticSettings.bicep` can enable exactly two log categories, plus metrics:
+
+| Category | Destination table |
+|---|---|
+| `MySqlSlowLogs` | `AzureDiagnostics` |
+| `MySqlAuditLogs` | `AzureDiagnostics` |
+| `AllMetrics` | `AzureMetrics` |
+
+There is no error-log category. Enabling audit logs also requires the server parameters
+`audit_log_enabled` and `audit_log_events` to be set on the Flexible Server itself — the
+diagnostic setting alone produces no rows.
+
 ## Rules
 
 - **Never hardcode credentials, hostnames, or resource IDs** in templates or parameter defaults.

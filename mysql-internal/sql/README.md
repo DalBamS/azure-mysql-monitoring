@@ -7,8 +7,10 @@ Plain SQL executed by the collector in [`../collector/`](../collector/) against
 
 | File | Purpose |
 |---|---|
+| `metrics_allowlist.sql` | The curated ~80 status variables actually retained |
 | `global_status.sql` | `SHOW GLOBAL STATUS` — counters (InnoDB I/O, threads, handlers, bytes) |
 | `global_variables.sql` | Configuration snapshot, incl. `innodb_redo_log_capacity` |
+| `error_log.sql` | `performance_schema.error_log` — incremental read by `LOGGED` cursor |
 | `ps_file_summary_io.sql` | `performance_schema.file_summary_by_event_name` — file I/O latency |
 | `ps_table_io_waits.sql` | `performance_schema.table_io_waits_summary_by_table` |
 | `ps_statement_digest.sql` | `performance_schema.events_statements_summary_by_digest` |
@@ -28,8 +30,20 @@ sampling cadence it is designed for.
 - Queries are **read-only**. No `SET GLOBAL`, no DDL, no writes.
 - Keep queries cheap; they run on every polling interval against servers under benchmark load.
 - Use parameter placeholders rather than string interpolation for any variable input.
-- The collector adds the UTC ISO-8601 timestamp and `RUN_ID` tag — queries return raw
+- The collector adds the UTC ISO-8601 timestamp, `RUN_ID` and tier tags — queries return raw
   metric name/value pairs and do not embed timing or run identity themselves.
+- **Filter here, not downstream.** MySQL 8.4 exposes 400+ status variables; the allow-list in this
+  directory is what keeps ingestion volume (and ADX cost) roughly fivefold lower.
+
+## `performance_schema.error_log` is a ring buffer
+
+This table is the only route to MySQL error-log data on Flexible Server — Azure's diagnostic
+settings offer no error-log category. It behaves differently from the summary tables:
+
+- Entries are **evicted** as new ones arrive, so a slow poll loses data permanently.
+- Read incrementally using the last seen `LOGGED` value as a cursor, and persist that cursor so a
+  collector restart neither skips nor duplicates entries.
+- `LOGGED` is a `TIMESTAMP(6)`; compare with microsecond precision or risk re-reading a boundary row.
 
 ## Configuration
 

@@ -7,14 +7,29 @@ and platform metrics from Azure Database for MySQL Flexible Server (MySQL 8.4).
 
 | File | Purpose |
 |---|---|
-| `slow-queries.kql` | Slow query log analysis |
+| `slow-queries.kql` | Slow query log analysis (`AzureDiagnostics`, `MySqlSlowLogs`) |
+| `audit-events.kql` | Audit log analysis (`AzureDiagnostics`, `MySqlAuditLogs`) |
 | `connections.kql` | Connection counts, aborted connects, TLS handshake failures |
 | `storage-latency.kql` | Read/write latency and IOPS, used for SSD v1 vs v2 comparison |
-| `cpu-memory.kql` | Resource utilisation |
-| `errors.kql` | Server error log events |
+| `cpu-memory.kql` | Resource utilisation (`AzureMetrics`) |
+| `platform-events.kql` | Failover, restart and maintenance events (`AzureActivity`) |
 
 One query per file, with a header comment describing its inputs, expected columns, and which
 workbook or alert consumes it.
+
+## Available tables
+
+Only three tables carry this service's telemetry:
+
+| Table | Contents |
+|---|---|
+| `AzureMetrics` | Platform metrics (CPU, memory, storage, IOPS, connections) |
+| `AzureDiagnostics` | Resource logs — **`MySqlSlowLogs` and `MySqlAuditLogs` only** |
+| `AzureActivity` | Control-plane operations on the server resource |
+
+There is **no error-log category** for Flexible Server. Do not write a query that expects one;
+MySQL error-log content comes from `performance_schema.error_log` in Layer 2 and is queried in
+[`../../adx/`](../../adx/) instead.
 
 ## Conventions
 
@@ -43,3 +58,10 @@ does connect to MySQL reads only environment variables — nothing is hardcoded:
 Premium SSD v2 is in **preview**; some metric or log categories may be absent for v2-backed
 servers, producing empty results. Treat gaps as missing telemetry, not as healthy behaviour, and
 confirm against Layer 2 collector data.
+
+## KQL is shared with ADX
+
+The query language here is the same one used in [`../../adx/`](../../adx/) and in
+[`../../grafana/dashboards/`](../../grafana/dashboards/). Table names and schemas differ, but
+operators, functions and time-series idioms carry over — reuse patterns rather than reinventing
+them per layer.

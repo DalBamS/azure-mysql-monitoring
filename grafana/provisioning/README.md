@@ -9,7 +9,8 @@ Grafana instance comes up fully configured from this repository, with no manual 
 |---|---|
 | `dashboards.yaml` | Dashboard provider: folder, update interval, source path |
 | `folders.yaml` | Folder layout (e.g. `Benchmark`, `Production`) |
-| `grafana.bicep` | Azure Managed Grafana instance + role assignments (optional) |
+| `alerting.yaml` | Grafana-managed alert rules and evaluation intervals |
+| `grafana.bicep` | Azure Managed Grafana (Standard) + role assignments |
 | `docker-compose.yaml` | Local self-hosted Grafana for development |
 
 ## Dashboard provider
@@ -32,44 +33,51 @@ browser and lost on the next deploy.
 
 ## Deployment targets
 
-- **Azure Managed Grafana (preferred).** Provision with Bicep, matching
-  [`../../azure-native/bicep/`](../../azure-native/bicep/). Grant its **managed identity** the
-  `Monitoring Reader` role on the Log Analytics workspace so the Azure Monitor data source needs no
-  secret.
-- **Self-hosted Grafana.** Mount this directory at `/etc/grafana/provisioning/` and supply the
-  environment variables below to the container.
+**Azure Managed Grafana (Standard tier)** is the target. Standard is required because the Azure
+Data Explorer data source is not available on the deprecated Essential tier.
 
-Network access to the Flexible Server (private endpoint or firewall rule) must allow the Grafana
-instance to reach `MYSQL_HOST` on 3306 **over TLS** — Azure enforces
-`require_secure_transport=ON`.
+Provision with Bicep alongside [`../../adx/bicep/`](../../adx/bicep/), and grant the workspace's
+**managed identity**:
+
+| Role | Scope | Why |
+|---|---|---|
+| ADX database `Viewer` | ADX database | Read metrics and error events |
+| `Monitoring Reader` | Log Analytics workspace | Read Slow/Audit logs and platform metrics |
+
+Both are read-only, so no ingestion or write path exists through Grafana, and no secret is stored
+anywhere.
+
+A self-hosted Grafana is supported for local development only: mount this directory at
+`/etc/grafana/provisioning/` and supply the environment variables below.
+
+## Alert rule provisioning
+
+Grafana-managed alert rules are provisioned from this repo as well, so evaluation intervals stay
+under review. The real-time budget assumes **10–30s evaluation** on ADX-backed rules, including the
+mandatory `collector_heartbeat` rule described in [`../README.md`](../README.md).
 
 ## Rules
 
-- **Never commit credentials.** Provisioning files may only reference `${ENV_VAR}`; secrets are
-  injected at startup from Key Vault, CI secrets, or a managed identity.
+- **Never commit credentials.** Provisioning files may only reference `${ENV_VAR}`; with managed
+  identity there is normally no secret to inject at all.
 - Do not commit a real `.env` or a rendered provisioning file containing expanded values.
 - Keep data source `uid` values stable across environments so dashboard JSON stays portable.
-- MySQL 8.4 only: the monitoring user uses `caching_sha2_password` (8.4 disables
-  `mysql_native_password` by default), and the connection is TLS-only.
+- Grafana identities are **read-only**; ingestion rights belong to the collector identity.
 
 ## Configuration
 
 | Variable | Description |
 |---|---|
-| `MYSQL_HOST` | Flexible Server FQDN |
-| `MYSQL_USER` | Read-only monitoring user |
-| `MYSQL_PASSWORD` | Password (never logged, never committed) |
-| `MYSQL_DB` | Database holding the collector's metrics table |
-| `RUN_ID` | Benchmark run identifier, surfaced as the `$run_id` dashboard variable |
+| `ADX_CLUSTER_URI` | `https://<cluster>.<region>.kusto.windows.net` |
+| `ADX_DATABASE` | Database holding `MysqlMetrics` / `MysqlEvents` |
 | `AZURE_SUBSCRIPTION_ID` | Subscription for the Azure Monitor data source |
-| `LOG_ANALYTICS_WORKSPACE_ID` | Workspace queried by the Azure Monitor data source |
+| `LOG_ANALYTICS_WORKSPACE_ID` | Workspace receiving Slow/Audit logs |
+| `RUN_ID` | Benchmark run identifier, surfaced as the `$run_id` dashboard variable |
 
 ```bash
-export MYSQL_HOST="<server>.mysql.database.azure.com"
-export MYSQL_USER="<user>"
-export MYSQL_PASSWORD="<password>"
-export MYSQL_DB="<database>"
+export ADX_CLUSTER_URI="https://<cluster>.<region>.kusto.windows.net"
+export ADX_DATABASE="<database>"
 export RUN_ID="ssdv2-2026-08-10-01"
 
-docker compose up -d    # local development instance
+docker compose up -d    # local development instance only
 ```

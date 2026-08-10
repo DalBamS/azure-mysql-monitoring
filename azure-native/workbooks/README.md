@@ -15,9 +15,10 @@ Workbooks are stored as JSON so they are reviewable in pull requests and deploya
 Export from the portal, then commit the JSON — do not treat the portal as the source of truth.
 
 > **Scope note:** [`../../grafana/`](../../grafana/) is the primary operator-facing view, because it
-> is the only layer that renders Azure Monitor data and `mysql-internal/` collector data on a single
-> time axis. Workbooks remain the Azure-native, portal-side view for people already working in the
-> Azure portal.
+> is the only layer that renders Azure Monitor data and `mysql-internal/` collector data (via
+> [`../../adx/`](../../adx/)) on a single time axis. Workbooks remain the Azure-native, portal-side
+> view for people already working in the Azure portal, and they keep working even if Grafana is
+> unavailable.
 
 ## Conventions
 

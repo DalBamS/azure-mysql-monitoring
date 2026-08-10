@@ -8,10 +8,12 @@ for MySQL Flexible Server (MySQL 8.4).
 | File | Purpose |
 |---|---|
 | `benchmark-ssd-v1-vs-v2.json` | Premium SSD v1 vs v2 comparison, driven by `$run_id` |
-| `production-overview.json` | Ongoing health view for gaming customer workloads |
+| `production-overview.json` | Ongoing health view for gaming customer workloads, 10s refresh |
+| `collector-health.json` | Heartbeat, ingestion lag, sink failures |
 | `storage-io.json` | IOPS, throughput, read/write latency, redo-log pressure |
 | `connections-and-threads.json` | Connections, aborted connects, thread activity |
 | `query-performance.json` | `performance_schema` statement digests and slow queries |
+| `error-log.json` | `performance_schema.error_log` events — ADX only |
 
 ## Rules
 
@@ -34,11 +36,14 @@ Because both the benchmark output and the collector output carry the same `RUN_I
 
 ## Panel conventions
 
-- **UTC ISO-8601 everywhere.** Do not pin a dashboard to a local timezone; a shifted axis silently
-  invalidates a v1 vs v2 comparison.
-- Layer 2 (MySQL data source) panels are **authoritative during benchmarks**; Layer 1
-  (Azure Monitor) panels are supplementary, since Premium SSD v2 is in preview and its platform
-  telemetry may have gaps. Annotate mixed panels so a gap is not misread as a healthy flat line.
+- **UTC everywhere.** Kusto `datetime` is always UTC; do not pin a dashboard to a local timezone,
+  since a shifted axis silently invalidates a v1 vs v2 comparison.
+- **ADX panels are authoritative during benchmarks**; Azure Monitor panels are supplementary, since
+  Premium SSD v2 is in preview and its platform telemetry may have gaps. Annotate mixed panels so a
+  gap is not misread as a healthy flat line.
+- **Match the table to the time range**: raw `MysqlMetrics` for live/short ranges, the
+  `MysqlMetrics1m` rollup for long ranges. Querying raw over a year is slow and expensive.
+- Production dashboards refresh at **10s** to stay inside the ~25–45s detection budget.
 - MySQL 8.4 only: redo-log panels use `innodb_redo_log_capacity`, not the removed
   `innodb_log_file_size`.
 - Counter metrics from `SHOW GLOBAL STATUS` are cumulative — apply a rate/delta transform rather
@@ -46,30 +51,43 @@ Because both the benchmark output and the collector output carry the same `RUN_I
 
 ## Query shape
 
-Panels backed by the MySQL data source read the collector's persisted metrics table, not
-`SHOW GLOBAL STATUS` directly (a live `SHOW` returns a snapshot that cannot be graphed):
+Panels backed by the ADX data source query the collector's ingested rows with KQL. Short/live
+ranges read the raw table:
 
-```sql
-SELECT
-  ts     AS time,   -- DATETIME(3) stored in UTC
-  metric,
-  value
-FROM monitoring_metrics
-WHERE run_id = '$run_id'
-  AND metric IN ($metric)
-  AND $__timeFilter(ts)
-ORDER BY ts;
+```kusto
+MysqlMetrics
+| where $__timeFilter(Timestamp)
+| where RunId == '$run_id' and Metric in ($metric)
+| order by Timestamp asc
+| extend Delta = Value - prev(Value)     // counters are cumulative
+| where Delta >= 0
+| project Timestamp, Metric, Delta
+```
+
+Long ranges must read the rollup view instead, so a year-long panel does not scan raw data:
+
+```kusto
+MysqlMetrics1m
+| where $__timeFilter(Timestamp)
+| where Metric == 'Innodb_data_reads'
+| project Timestamp, Avg, Max
+```
+
+Error-log panels read the events table — this data has no Azure Monitor equivalent:
+
+```kusto
+MysqlEvents
+| where $__timeFilter(Timestamp) and Source == 'error_log' and Level == 'Error'
+| project Timestamp, Host, ErrorCode, Subsystem, Message
 ```
 
 ## Configuration
 
-Dashboards hold no connection details; data sources supply them from environment variables and
-nothing is hardcoded:
+Dashboards hold no connection details; data sources supply them via managed identity and nothing is
+hardcoded:
 
 | Variable | Description |
 |---|---|
-| `MYSQL_HOST` | Flexible Server FQDN |
-| `MYSQL_USER` | Read-only monitoring user |
-| `MYSQL_PASSWORD` | Password (never logged, never committed) |
-| `MYSQL_DB` | Database holding the metrics table |
+| `ADX_CLUSTER_URI` | `https://<cluster>.<region>.kusto.windows.net` |
+| `ADX_DATABASE` | Database holding `MysqlMetrics` / `MysqlEvents` |
 | `RUN_ID` | Benchmark run identifier, surfaced as `$run_id` |

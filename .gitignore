@@ -10,6 +10,15 @@ azure-native/bicep/main.parameters.json
 benchmark-integration/runs/
 benchmark-integration/report/
 
+# Collector local state
+mysql-internal/collector/spool/
+mysql-internal/collector/*.jsonl
+mysql-internal/collector/.cursor-state.json
+
+# ADX / Azure IaC — rendered parameters may contain resource identifiers
+adx/bicep/*.parameters.json
+!adx/bicep/*.parameters.example.json
+
 # Grafana — rendered provisioning may contain expanded secrets
 grafana/provisioning/*.rendered.yaml
 grafana/provisioning/.grafana-data/
