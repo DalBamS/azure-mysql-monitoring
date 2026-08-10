@@ -3,17 +3,39 @@
 Committed Grafana dashboard definitions. These are the **final monitoring view** for Azure Database
 for MySQL Flexible Server (MySQL 8.4).
 
-## Expected contents
+## Contents
 
-| File | Purpose |
-|---|---|
-| `benchmark-ssd-v1-vs-v2.json` | Premium SSD v1 vs v2 comparison, driven by `$run_id` |
-| `production-overview.json` | Ongoing health view for gaming customer workloads, 10s refresh |
-| `collector-health.json` | Heartbeat, ingestion lag, sink failures |
-| `storage-io.json` | IOPS, throughput, read/write latency, redo-log pressure |
-| `connections-and-threads.json` | Connections, aborted connects, thread activity |
-| `query-performance.json` | `performance_schema` statement digests and slow queries |
-| `error-log.json` | `performance_schema.error_log` events — ADX only |
+| File | Status | Purpose |
+|---|---|---|
+| `production-overview.json` | **built** | Ongoing health view for gaming customer workloads |
+| `benchmark-ssd-v1-vs-v2.json` | **built** | Premium SSD v1 vs v2 comparison, driven by `$baseline` / `$candidate` |
+| `collector-health.json` | **built** | Heartbeat, sample arrival rate, cycle duration, ingestion lag |
+| `check-dashboard-queries.py` | **built** | Runs every panel's KQL against the real cluster |
+| `storage-io.json` | planned | IOPS, throughput, read/write latency, redo-log pressure |
+| `connections-and-threads.json` | planned | Folded into `production-overview.json` for now |
+| `query-performance.json` | planned | `performance_schema` statement digests and slow queries |
+| `error-log.json` | planned | Folded into `production-overview.json` for now |
+
+Deploy them with [`../provisioning/deploy.ps1`](../provisioning/deploy.ps1).
+
+## Verifying a dashboard actually works
+
+Importing a dashboard only proves its JSON parsed. A panel whose KQL names a column that does not
+exist imports perfectly and then draws an empty graph — which looks exactly like a healthy idle
+server. So panels are verified by executing their queries:
+
+```bash
+. ./testing/scripts/load-env.ps1
+python grafana/dashboards/check-dashboard-queries.py
+```
+
+The script substitutes the Grafana macros (`$__timeFilter`) and template variables that ADX would
+otherwise reject, then runs each query and reports its row count. A panel returning zero rows is
+reported separately from one that failed, because an empty error-log panel is correct on a healthy
+server while an empty throughput panel is not.
+
+Last verified against the live test environment: **24 panels returning data, 1 valid but empty
+(error log), 0 failed.**
 
 ## Rules
 
@@ -22,17 +44,22 @@ for MySQL Flexible Server (MySQL 8.4).
 - **No credentials, no real hostnames, no customer identifiers** in dashboard JSON. Reference data
   sources by their provisioned UID from [`../datasources/`](../datasources/).
 - Strip volatile export noise (`id`, `version`, `iteration`) before committing to keep diffs clean.
+- A new panel needs a passing run of `check-dashboard-queries.py` before it is committed.
 
-## Required template variables
+## Template variables
 
-| Variable | Purpose |
-|---|---|
-| `$run_id` | Selects one benchmark run; matches the `RUN_ID` env var tagged onto every metric row |
-| `$tier` | `premium-ssd-v1` / `premium-ssd-v2`, for labelling comparisons |
-| `$server` | Which Flexible Server instance to display |
+| Variable | Dashboard | Purpose |
+|---|---|---|
+| `$run_id` | overview, collector health | Selects one run; matches the `RUN_ID` env var tagged onto every metric row |
+| `$host` | overview | Which Flexible Server instance to display |
+| `$baseline` / `$candidate` | benchmark | The two runs being compared |
 
 Because both the benchmark output and the collector output carry the same `RUN_ID`, selecting
 `$run_id` lines up load-generator results and engine-internal metrics on one time axis.
+
+The benchmark dashboard selects **two runs** rather than filtering by time, because the v1 and v2
+runs happen at different wall-clock times — a shared time axis would show one run or the other,
+never both. Its rate panels plot *elapsed seconds since each run started* so the two overlay.
 
 ## Panel conventions
 
@@ -43,9 +70,11 @@ Because both the benchmark output and the collector output carry the same `RUN_I
   gap is not misread as a healthy flat line.
 - **Match the table to the time range**: raw `MysqlMetrics` for live/short ranges, the
   `MysqlMetrics1m` rollup for long ranges. Querying raw over a year is slow and expensive.
-- Production dashboards refresh at **10s** to stay inside the ~25–45s detection budget.
-- MySQL 8.4 only: redo-log panels use `innodb_redo_log_capacity`, not the removed
-  `innodb_log_file_size`.
+- Production dashboards refresh at **30s**; the streaming path was measured at 6.5s end to end on
+  the test environment, so a faster refresh mostly re-queries the same rows.
+- MySQL 8.4 only: redo-log panels use `innodb_redo_log_capacity`. `innodb_log_file_size` is
+  deprecated but still *readable* — it reports a stale value that governs nothing once
+  `innodb_redo_log_capacity` is set, so never plot it.
 - Counter metrics from `SHOW GLOBAL STATUS` are cumulative — apply a rate/delta transform rather
   than plotting the raw value.
 

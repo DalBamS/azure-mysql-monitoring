@@ -1,0 +1,163 @@
+{
+  "uid": "mysqlmon-benchmark-ssd",
+  "title": "Benchmark — Premium SSD v1 vs v2",
+  "description": "Side-by-side comparison of two benchmark runs. Selecting the runs rather than filtering by time is deliberate: the two runs happen at different wall-clock times, so a shared time axis would show one run or the other, never both. This dashboard is fed exclusively by the Layer 2 collector, because Premium SSD v2 is in preview and Azure platform metrics may be incomplete for it.",
+  "tags": ["mysql", "benchmark"],
+  "timezone": "utc",
+  "editable": false,
+  "schemaVersion": 39,
+  "refresh": "",
+  "time": { "from": "now-7d", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "baseline",
+        "label": "Baseline run (v1)",
+        "type": "query",
+        "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+        "query": {
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "table",
+          "query": "MysqlMetrics | summarize LastSeen = max(Timestamp) by RunId | order by LastSeen desc | project RunId"
+        },
+        "refresh": 1,
+        "includeAll": false,
+        "multi": false
+      },
+      {
+        "name": "candidate",
+        "label": "Candidate run (v2)",
+        "type": "query",
+        "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+        "query": {
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "table",
+          "query": "MysqlMetrics | summarize LastSeen = max(Timestamp) by RunId | order by LastSeen desc | project RunId"
+        },
+        "refresh": 1,
+        "includeAll": false,
+        "multi": false
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "table",
+      "title": "Headline comparison",
+      "description": "Avg / p95 / max for the metrics that decide the storage question. p95 matters more than avg here: a gaming workload feels tail latency, not the mean.",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": { "defaults": { "custom": { "align": "right" } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "table",
+          "query": "let metrics = dynamic(['Innodb_data_reads', 'Innodb_data_writes', 'Innodb_data_fsyncs', 'Innodb_os_log_fsyncs', 'Innodb_row_lock_time_avg', 'Innodb_log_waits', 'Threads_running', 'Slow_queries']);\nMysqlMetrics\n| where RunId in ('$baseline', '$candidate')\n| where Metric in (metrics)\n| summarize Avg = round(avg(Value), 2), P95 = round(percentile(Value, 95), 2), Max = round(max(Value), 2), Samples = count() by Metric, RunId, Tier\n| order by Metric asc, RunId asc"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "table",
+      "title": "Delta — candidate vs baseline",
+      "description": "Positive PercentChange means the candidate run recorded a higher value. Whether higher is better depends on the metric: more IOPS is good, more log waits is not.",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 10 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "right" } },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "PercentChange" },
+            "properties": [
+              { "id": "unit", "value": "percent" },
+              { "id": "custom.cellOptions", "value": { "type": "color-text" } },
+              {
+                "id": "thresholds",
+                "value": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "text", "value": -5 }, { "color": "green", "value": 5 } ] }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "table",
+          "query": "let metrics = dynamic(['Innodb_data_reads', 'Innodb_data_writes', 'Innodb_data_fsyncs', 'Innodb_os_log_fsyncs', 'Innodb_row_lock_time_avg', 'Innodb_log_waits', 'Threads_running', 'Slow_queries']);\nMysqlMetrics\n| where RunId in ('$baseline', '$candidate')\n| where Metric in (metrics)\n| summarize P95 = percentile(Value, 95) by Metric, RunId\n| summarize Baseline = anyif(P95, RunId == '$baseline'), Candidate = anyif(P95, RunId == '$candidate') by Metric\n| where isnotnull(Baseline) and isnotnull(Candidate) and Baseline > 0\n| extend PercentChange = round(100.0 * (Candidate - Baseline) / Baseline, 1)\n| order by abs(PercentChange) desc"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Data read rate — elapsed seconds into run",
+      "description": "The x-axis is seconds since each run started, not wall-clock time, so two runs recorded hours apart overlay cleanly.",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 20 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": { "defaults": { "unit": "iops", "custom": { "fillOpacity": 0, "showPoints": "never" } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "table",
+          "query": "let runStarts = MysqlMetrics | where RunId in ('$baseline', '$candidate') | summarize RunStart = min(Timestamp) by RunId;\nMysqlMetrics\n| where RunId in ('$baseline', '$candidate')\n| where Metric == 'Innodb_data_reads'\n| order by RunId asc, Timestamp asc\n| extend PrevValue = prev(Value), PrevTs = prev(Timestamp), PrevRun = prev(RunId)\n| where RunId == PrevRun\n| extend Seconds = datetime_diff('second', Timestamp, PrevTs)\n| where Seconds > 0 and Value >= PrevValue\n| extend Rate = (Value - PrevValue) / Seconds\n| join kind=inner runStarts on RunId\n| extend ElapsedSeconds = datetime_diff('second', Timestamp, RunStart)\n| project ElapsedSeconds, RunId, Rate\n| order by ElapsedSeconds asc"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Write rate — elapsed seconds into run",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 20 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": { "defaults": { "unit": "iops", "custom": { "fillOpacity": 0, "showPoints": "never" } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "table",
+          "query": "let runStarts = MysqlMetrics | where RunId in ('$baseline', '$candidate') | summarize RunStart = min(Timestamp) by RunId;\nMysqlMetrics\n| where RunId in ('$baseline', '$candidate')\n| where Metric == 'Innodb_data_writes'\n| order by RunId asc, Timestamp asc\n| extend PrevValue = prev(Value), PrevTs = prev(Timestamp), PrevRun = prev(RunId)\n| where RunId == PrevRun\n| extend Seconds = datetime_diff('second', Timestamp, PrevTs)\n| where Seconds > 0 and Value >= PrevValue\n| extend Rate = (Value - PrevValue) / Seconds\n| join kind=inner runStarts on RunId\n| extend ElapsedSeconds = datetime_diff('second', Timestamp, RunStart)\n| project ElapsedSeconds, RunId, Rate\n| order by ElapsedSeconds asc"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "table",
+      "title": "Run inventory",
+      "description": "Confirms the two runs are actually comparable — a run with far fewer samples or a much shorter duration did not exercise the server the same way.",
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 29 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "table",
+          "query": "MysqlMetrics\n| summarize Started = min(Timestamp), Ended = max(Timestamp), Samples = count(), Metrics = dcount(Metric) by RunId, Tier, Host\n| extend DurationMinutes = round(datetime_diff('second', Ended, Started) / 60.0, 1)\n| order by Started desc"
+        }
+      ]
+    }
+  ]
+}

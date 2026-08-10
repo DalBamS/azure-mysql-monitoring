@@ -1,0 +1,13 @@
+{
+  "name": "Azure Monitor",
+  "uid": "azure-monitor-oob",
+  "type": "grafana-azure-monitor-datasource",
+  "access": "proxy",
+  "isDefault": false,
+  "jsonData": {
+    "azureAuthType": "msi",
+    "subscriptionId": "${AZURE_SUBSCRIPTION_ID}"
+  },
+  "secureJsonData": {},
+  "readOnly": false
+}

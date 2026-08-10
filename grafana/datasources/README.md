@@ -5,51 +5,44 @@ Data source definitions for **Azure Managed Grafana**. Two data sources back eve
 > **Tier requirement:** the Azure Data Explorer data source is available on the Managed Grafana
 > **Standard** tier. It is not offered on the deprecated Essential tier.
 
-## Expected contents
+## Contents
 
-| File | Purpose |
-|---|---|
-| `azure-data-explorer.yaml` | **Primary** — the unified metrics + logs store |
-| `azure-monitor.yaml` | Layer 1 — platform metrics, plus Slow/Audit logs in Log Analytics |
+| File | uid | Purpose |
+|---|---|---|
+| `adx.json` | `mysqlmon-adx` | **Primary** — the unified metrics + logs store |
+| `azure-monitor.json` | `azure-monitor-oob` | Layer 1 — platform metrics, plus Slow/Audit logs in Log Analytics |
+
+Apply them with [`../provisioning/deploy.ps1`](../provisioning/deploy.ps1), which substitutes the
+`${ENV_VAR}` placeholders and creates or updates each data source in place.
+
+These are **Grafana HTTP API payloads**, not `provisioning/datasources/*.yaml` files. Azure Managed
+Grafana does not mount a provisioning directory — it is configured through the API — so the API
+shape is the one that actually works against the deployment target.
 
 ## 1. Azure Data Explorer (primary)
 
 Reads everything the collector produces: numeric metrics, `performance_schema.error_log` events,
 and benchmark run metadata. This is the real-time path and the long-term store.
 
-```yaml
-apiVersion: 1
-datasources:
-  - name: ADX
-    type: grafana-azure-data-explorer-datasource
-    uid: adx
-    jsonData:
-      azureCredentials:
-        authType: msi          # Managed Grafana's managed identity — no secret
-      clusterUrl: ${ADX_CLUSTER_URI}
-      defaultDatabase: ${ADX_DATABASE}
-      dataConsistency: strongconsistency
-```
+Authentication is `azureCredentials.authType: msi` — the workspace's own managed identity, so no
+secret exists to leak or rotate. Grant that identity the **`Viewer`** role on the ADX database,
+assigned in [`../../adx/bicep/`](../../adx/bicep/).
 
-Grant that managed identity the **`Viewer`** role on the ADX database — read-only, assigned in
-[`../../adx/bicep/`](../../adx/bicep/). Nothing else is needed, and no credential is stored.
+> Verified on the live test environment: the Grafana managed identity appears in the ADX database
+> principal list as `principalType: App` with role `Viewer`, and a query through the Grafana proxy
+> returned real rows from `MysqlMetrics`.
 
 ## 2. Azure Monitor (Layer 1)
 
 Platform metrics and the two resource log categories Flexible Server actually emits —
 **`MySQL Audit Logs`** and **`MySQL Slow Logs`**, both landing in the `AzureDiagnostics` table.
 
-```yaml
-apiVersion: 1
-datasources:
-  - name: AzureMonitor
-    type: grafana-azure-monitor-datasource
-    uid: azmon
-    jsonData:
-      azureAuthType: msi
-      subscriptionId: ${AZURE_SUBSCRIPTION_ID}
-      logAnalyticsDefaultWorkspace: ${LOG_ANALYTICS_WORKSPACE_ID}
-```
+Azure Managed Grafana **ships this data source built in**, already using managed identity, under the
+fixed uid `azure-monitor-oob`. A uid cannot be changed after creation and the name must be unique,
+so creating a second "Azure Monitor" fails with a 409. This repo therefore adopts the built-in uid
+rather than duplicating it: `azure-monitor.json` updates the existing data source in place, pinning
+`subscriptionId`. On a self-hosted Grafana the same file simply creates one with that uid, so
+dashboard JSON stays portable across both.
 
 **There is no error-log category** in Flexible Server diagnostic settings. Error-log data comes only
 from the ADX data source, fed by the collector reading `performance_schema.error_log`.

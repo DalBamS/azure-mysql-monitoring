@@ -1,0 +1,51 @@
+// audit-events.kql — audit log analysis
+//
+// Input:    AzureDiagnostics, Category == 'MySqlAuditLogs'
+// Requires: diagnostic setting forwarding MySqlAuditLogs, AND the server parameters
+//           audit_log_enabled=ON and audit_log_events set to the classes you want.
+//           audit_log_events defaults to a narrow set; CONNECTION is the one that makes
+//           failed logins visible.
+// Consumed by: azure-native/workbooks/
+//
+// event_class_s distinguishes what was captured: 'connection_log' for session events,
+// 'general_log' for statements. error_code_d is 0 on success — a non-zero value on a
+// connection event is a rejected login, which is the security signal worth alerting on.
+
+let lookback = 24h;
+AzureDiagnostics
+| where TimeGenerated > ago(lookback)
+| where Category == 'MySqlAuditLogs'
+| extend
+    EventClass    = tostring(event_class_s),
+    EventSubclass = tostring(event_subclass_s),
+    User          = tostring(user_s),
+    ClientIp      = tostring(ip_s),
+    Database      = tostring(db_s),
+    ErrorCode     = tolong(error_code_d),
+    IsEntraAuth   = tostring(is_aad_auth_s),
+    Statement     = tostring(sql_text_s)
+| project
+    TimeGenerated,
+    Resource,
+    EventClass,
+    EventSubclass,
+    User,
+    ClientIp,
+    Database,
+    ErrorCode,
+    IsEntraAuth,
+    Statement
+| order by TimeGenerated desc
+| take 500
+
+// --- Variant: failed connection attempts by source -------------------------------------
+// Swap the projection above for this to get the security view. Grouping by IP rather than
+// by user is deliberate: credential stuffing varies the user and holds the source constant.
+//
+// AzureDiagnostics
+// | where TimeGenerated > ago(24h)
+// | where Category == 'MySqlAuditLogs' and event_class_s == 'connection_log'
+// | where tolong(error_code_d) != 0
+// | summarize Failures = count(), Users = make_set(user_s, 10), LastSeen = max(TimeGenerated)
+//     by ClientIp = tostring(ip_s), ErrorCode = tolong(error_code_d)
+// | order by Failures desc

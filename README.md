@@ -10,6 +10,17 @@ The same repository serves two purposes:
 > Project rules live in [`.github/copilot-instructions.md`](.github/copilot-instructions.md).
 > Read them before contributing or prompting Copilot in this repo.
 
+## Start here
+
+| If you want to… | Go to |
+|---|---|
+| **Set up monitoring for a server you already have** | **[`SETUP.md`](SETUP.md)** |
+| See the whole stack work end to end first, on throwaway resources | [`testing/`](testing/) |
+| Understand what each layer can and cannot tell you | [the comparison table in `SETUP.md`](SETUP.md#what-each-layer-can-and-cannot-tell-you) |
+
+Everything in this repo has been deployed against a real Azure subscription, not just written.
+Where a claim is verified, the README says so and names the script that verifies it.
+
 ## Architecture overview
 
 ```mermaid
@@ -126,6 +137,7 @@ flatlined chart otherwise reads as healthy.
 
 | Path | Purpose |
 |---|---|
+| [`SETUP.md`](SETUP.md) | **Production setup guide — start here** |
 | [`azure-native/`](azure-native/) | Azure Monitor–based monitoring (Layer 1) |
 | [`azure-native/bicep/`](azure-native/bicep/) | Bicep IaC for workspace, diagnostic settings, alerts |
 | [`azure-native/workbooks/`](azure-native/workbooks/) | Azure Workbook dashboard definitions |
@@ -165,12 +177,27 @@ python verify.py
 `verify.py` asserts behaviour rather than deployment success, and states what each failure
 would mean. See [`testing/README.md`](testing/README.md).
 
+Two further checks run against whichever environment you have configured, production included:
+
+```bash
+python azure-native/kql/check-kql.py                    # Layer 1 queries return rows
+python grafana/dashboards/check-dashboard-queries.py    # every dashboard panel's KQL runs
+```
+
+Both exist because the failure mode that matters here is silent. A panel naming a column that does
+not exist imports cleanly and draws an empty graph — which is exactly what a healthy idle server
+also draws. Executing the queries is the only thing that tells the two apart.
+
 ## MySQL 8.4 notes
 
 - `caching_sha2_password` is the default authentication plugin; `mysql_native_password` is
   **disabled by default**. Clients and drivers must support `caching_sha2_password`.
-- `innodb_redo_log_capacity` replaces `innodb_log_file_size` — use the new variable everywhere.
-- Azure enforces `require_secure_transport=ON`, so **every client must connect over TLS**.
+- `innodb_redo_log_capacity` replaces `innodb_log_file_size`. The old variable is **deprecated, not
+  removed** — 8.4 still returns a value for it, and that value governs nothing once
+  `innodb_redo_log_capacity` is set. Reading it back is therefore actively misleading.
+- Azure enforces `require_secure_transport=ON`, so **every client must connect over TLS**. A client
+  without TLS fails the handshake and is counted as an aborted connection; it never appears in the
+  error log.
 
 ## Configuration
 

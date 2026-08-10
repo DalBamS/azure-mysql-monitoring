@@ -1,0 +1,42 @@
+// slow-queries.kql — slow query log analysis
+//
+// Input:    AzureDiagnostics, Category == 'MySqlSlowLogs'
+// Requires: diagnostic setting forwarding MySqlSlowLogs, AND the server parameters
+//           slow_query_log=ON and long_query_time set. The diagnostic setting alone
+//           produces an empty table — it forwards a log MySQL is not writing.
+// Consumed by: azure-native/workbooks/, and the slow-query alert in azure-native/alerts/
+//
+// Columns are Log Analytics' dynamic-schema names: _s = string, _d = double, _t = datetime.
+//
+// Note the ceiling on this data: Azure caps slow-log forwarding, and sql_text_s is the
+// normalised statement, not the literal one. For per-digest latency distributions use the
+// ps_digest metrics in ADX instead — those come from performance_schema and are not sampled.
+
+let lookback = 24h;
+AzureDiagnostics
+| where TimeGenerated > ago(lookback)
+| where Category == 'MySqlSlowLogs'
+| extend
+    QuerySeconds   = todouble(query_time_d),
+    LockSeconds    = todouble(lock_time_d),
+    RowsSent       = tolong(rows_sent_d),
+    RowsExamined   = tolong(rows_examined_d),
+    Database       = tostring(db_s),
+    Statement      = tostring(sql_text_s),
+    ClientHost     = tostring(host_s)
+// Rows examined per row sent is the sharper signal: a query can be fast today purely
+// because the table is small, and still be a full scan waiting to become a incident.
+| extend ExaminedPerSent = iff(RowsSent > 0, RowsExamined * 1.0 / RowsSent, todouble(RowsExamined))
+| project
+    TimeGenerated,
+    Resource,
+    Database,
+    QuerySeconds,
+    LockSeconds,
+    RowsSent,
+    RowsExamined,
+    ExaminedPerSent,
+    ClientHost,
+    Statement
+| order by QuerySeconds desc
+| take 200

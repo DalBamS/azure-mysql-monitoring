@@ -1,0 +1,32 @@
+// cpu-memory.kql — resource utilisation
+//
+// Input:    AzureMetrics
+// Consumed by: azure-native/workbooks/, azure-native/alerts/
+//
+// On Burstable (B-series) SKUs, cpu_percent alone is misleading: the server can sit at low
+// CPU and still be throttled once its credit balance is exhausted. cpu_credits_remaining is
+// only emitted on Burstable SKUs, so it is absent — not zero — on General Purpose and
+// Business Critical. Treat an empty series as "not a Burstable SKU", not as "no credits".
+
+let lookback = 24h;
+let bucket = 5m;
+AzureMetrics
+| where TimeGenerated > ago(lookback)
+| where MetricName in ('cpu_percent', 'memory_percent', 'cpu_credits_remaining', 'cpu_credits_consumed')
+| summarize Avg = round(avg(Average), 2), Max = round(max(Maximum), 2)
+    by bin(TimeGenerated, bucket), MetricName, Resource
+| order by TimeGenerated asc
+
+// --- Saturation summary ----------------------------------------------------------------
+// p95 rather than average: a server that averages 40% CPU but spends an hour a day at 95%
+// is the one that pages someone, and the average hides exactly that hour.
+//
+// AzureMetrics
+// | where TimeGenerated > ago(7d)
+// | where MetricName in ('cpu_percent', 'memory_percent', 'io_consumption_percent', 'storage_percent')
+// | summarize
+//     Avg = round(avg(Average), 1),
+//     P95 = round(percentile(Maximum, 95), 1),
+//     Peak = round(max(Maximum), 1)
+//   by MetricName, Resource
+// | order by P95 desc

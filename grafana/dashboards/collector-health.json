@@ -1,0 +1,173 @@
+{
+  "uid": "mysqlmon-collector-health",
+  "title": "MySQL 8.4 — Collector Health",
+  "description": "Monitors the monitoring. Every other dashboard in this folder is only as trustworthy as the collector feeding it, and collector failure is silent by nature: missing data renders as a flat line, which is indistinguishable from an idle server. Check this dashboard before believing a quiet one.",
+  "tags": ["mysql", "meta"],
+  "timezone": "utc",
+  "editable": false,
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "run_id",
+        "label": "Run ID",
+        "type": "query",
+        "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+        "query": {
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "table",
+          "query": "MysqlMetrics | summarize LastSeen = max(Timestamp) by RunId | order by LastSeen desc | project RunId"
+        },
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "table",
+      "title": "Heartbeat status by host",
+      "description": "The collector emits collector_heartbeat every cycle. DOWN means no heartbeat for 60s — treat every other panel as stale from that timestamp onward.",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Status" },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": { "type": "color-background" }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  { "type": "value", "options": { "OK": { "color": "green", "index": 0 }, "DOWN": { "color": "red", "index": 1 } } }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "table",
+          "query": "CollectorHealth(6h)\n| project Host, RunId, LastBeat, SecondsSinceLastBeat, Status\n| order by SecondsSinceLastBeat desc"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Distinct metrics arriving",
+      "description": "The collector's allow-list keeps roughly 80 of the 284 variables SHOW GLOBAL STATUS exposes, plus one series per query digest. A sudden drop means the allow-list stopped matching — a MySQL upgrade renaming a status variable looks exactly like this.",
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "table",
+          "query": "MysqlMetrics\n| where $__timeFilter(Timestamp)\n| where RunId in ($run_id)\n| summarize Metrics = dcount(Metric) by Source\n| order by Source asc"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Rows ingested",
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "table",
+          "query": "MysqlMetrics\n| where $__timeFilter(Timestamp)\n| where RunId in ($run_id)\n| summarize Rows = count()"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Sample arrival rate",
+      "description": "Rows per minute reaching ADX. Gaps here are collector outages or ingestion backlog; compare against the heartbeat table to tell the two apart.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 6 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "fillOpacity": 20, "showPoints": "never" } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "time_series",
+          "query": "MysqlMetrics\n| where $__timeFilter(Timestamp)\n| where RunId in ($run_id)\n| summarize Rows = count() by bin(Timestamp, 1m), Source\n| order by Timestamp asc"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Collection cycle duration",
+      "description": "How long one poll of SHOW GLOBAL STATUS plus performance_schema takes. If this approaches the collection interval, the collector is the bottleneck and samples will start to skew.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": { "defaults": { "unit": "ms", "custom": { "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "time_series",
+          "query": "MysqlMetrics\n| where $__timeFilter(Timestamp)\n| where Source == 'collector' and Metric == 'collector_cycle_duration_ms'\n| where RunId in ($run_id)\n| project Timestamp, Host, Value\n| order by Timestamp asc"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "Ingestion lag — newest sample per run",
+      "description": "End-to-end freshness: collector poll to queryable row. The streaming path was measured at 6.5s on the test environment; the queued path is minutes by design.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "table",
+          "query": "MysqlMetrics\n| summarize Newest = max(Timestamp), Rows = count() by RunId, Host, Tier\n| extend AgeSeconds = datetime_diff('second', now(), Newest)\n| order by Newest desc"
+        }
+      ]
+    }
+  ]
+}

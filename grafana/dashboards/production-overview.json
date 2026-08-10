@@ -1,0 +1,258 @@
+{
+  "uid": "mysqlmon-prod-overview",
+  "title": "MySQL 8.4 — Production Overview",
+  "description": "Layer 2 collector view of an Azure Database for MySQL Flexible Server. Every panel reads MysqlMetrics in ADX; nothing here depends on Azure platform metrics, so it works identically on Premium SSD v2 preview servers.",
+  "tags": ["mysql", "production"],
+  "timezone": "utc",
+  "editable": false,
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "run_id",
+        "label": "Run ID",
+        "type": "query",
+        "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+        "query": {
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "table",
+          "query": "MysqlMetrics | summarize LastSeen = max(Timestamp) by RunId | order by LastSeen desc | project RunId"
+        },
+        "refresh": 1,
+        "includeAll": false,
+        "multi": false
+      },
+      {
+        "name": "host",
+        "label": "Host",
+        "type": "query",
+        "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+        "query": {
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "table",
+          "query": "MysqlMetrics | where RunId == '$run_id' | summarize by Host"
+        },
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Collector heartbeat",
+      "description": "Seconds since the collector last reported. A dead collector flatlines every other panel, and a flatline looks exactly like a healthy idle server — so this panel comes first.",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 60 },
+              { "color": "red", "value": 120 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "background" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "table",
+          "query": "MysqlMetrics\n| where Timestamp > ago(30m)\n| where Metric == 'collector_heartbeat' and RunId == '$run_id'\n| summarize LastBeat = max(Timestamp) by Host\n| extend SecondsSinceLastBeat = datetime_diff('second', now(), LastBeat)\n| project Host, SecondsSinceLastBeat"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Threads connected",
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "table",
+          "query": "MysqlMetrics\n| where $__timeFilter(Timestamp)\n| where Metric == 'Threads_connected' and RunId == '$run_id'\n| summarize arg_max(Timestamp, Value) by Host\n| project Host, Connected = Value"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "InnoDB buffer pool hit ratio",
+      "description": "1 - (reads from disk / logical read requests). Sustained dips below 99% on a gaming workload usually mean the working set no longer fits in the buffer pool.",
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0.9,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 0.95 },
+              { "color": "green", "value": 0.99 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "background" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "table",
+          "query": "MysqlMetrics\n| where $__timeFilter(Timestamp)\n| where RunId == '$run_id'\n| where Metric in ('Innodb_buffer_pool_reads', 'Innodb_buffer_pool_read_requests')\n| summarize arg_max(Timestamp, Value) by Host, Metric\n| summarize Reads = sumif(Value, Metric == 'Innodb_buffer_pool_reads'), Requests = sumif(Value, Metric == 'Innodb_buffer_pool_read_requests') by Host\n| where Requests > 0\n| project Host, HitRatio = 1.0 - (Reads / Requests)"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Slow queries (total)",
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "table",
+          "query": "MysqlMetrics\n| where $__timeFilter(Timestamp)\n| where Metric == 'Slow_queries' and RunId == '$run_id'\n| summarize arg_max(Timestamp, Value) by Host\n| project Host, SlowQueries = Value"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Throughput (queries/sec)",
+      "description": "Derived at query time from the cumulative Queries counter. Negative deltas from a server restart are dropped here, but remain visible in the raw table.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": { "defaults": { "unit": "qps", "custom": { "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "time_series",
+          "query": "MysqlMetrics\n| where $__timeFilter(Timestamp)\n| where Metric == 'Queries' and RunId == '$run_id'\n| order by Host asc, Timestamp asc\n| extend PrevValue = prev(Value), PrevTs = prev(Timestamp), PrevHost = prev(Host)\n| where Host == PrevHost\n| extend Seconds = datetime_diff('second', Timestamp, PrevTs)\n| where Seconds > 0 and Value >= PrevValue\n| project Timestamp, Host, QPS = (Value - PrevValue) / Seconds\n| order by Timestamp asc"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Connections and threads",
+      "description": "Threads_running is the saturation signal; Threads_connected only counts open sessions. A pool that stays connected but stops running work shows up as a gap between the two.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "fillOpacity": 0, "showPoints": "never" } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "time_series",
+          "query": "MysqlMetrics\n| where $__timeFilter(Timestamp)\n| where RunId == '$run_id'\n| where Metric in ('Threads_connected', 'Threads_running', 'Threads_cached', 'Max_used_connections')\n| project Timestamp, Metric, Value\n| order by Timestamp asc"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "InnoDB row operations (rows/sec)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 13 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": { "defaults": { "unit": "rps", "custom": { "fillOpacity": 10, "showPoints": "never", "stacking": { "mode": "normal" } } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "time_series",
+          "query": "MysqlMetrics\n| where $__timeFilter(Timestamp)\n| where RunId == '$run_id'\n| where Metric in ('Innodb_rows_read', 'Innodb_rows_inserted', 'Innodb_rows_updated', 'Innodb_rows_deleted')\n| order by Metric asc, Timestamp asc\n| extend PrevValue = prev(Value), PrevTs = prev(Timestamp), PrevMetric = prev(Metric)\n| where Metric == PrevMetric\n| extend Seconds = datetime_diff('second', Timestamp, PrevTs)\n| where Seconds > 0 and Value >= PrevValue\n| project Timestamp, Metric, Rate = (Value - PrevValue) / Seconds\n| order by Timestamp asc"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Connection errors (per sec)",
+      "description": "Aborted_connects counts failed handshakes — with require_secure_transport=ON, a client missing TLS config lands here rather than in the error log.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 13 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "fillOpacity": 20, "showPoints": "auto" } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "time_series",
+          "query": "MysqlMetrics\n| where $__timeFilter(Timestamp)\n| where RunId == '$run_id'\n| where Metric in ('Aborted_connects', 'Aborted_clients')\n| order by Metric asc, Timestamp asc\n| extend PrevValue = prev(Value), PrevTs = prev(Timestamp), PrevMetric = prev(Metric)\n| where Metric == PrevMetric\n| extend Seconds = datetime_diff('second', Timestamp, PrevTs)\n| where Seconds > 0 and Value >= PrevValue\n| project Timestamp, Metric, Rate = (Value - PrevValue) / Seconds\n| order by Timestamp asc"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "table",
+      "title": "Error log (performance_schema.error_log)",
+      "description": "Azure Flexible Server publishes no error-log diagnostic category, so Layer 1 cannot supply this at all. These rows exist only because the collector reads the ring buffer directly.",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 21 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "table",
+          "query": "MysqlEvents\n| where $__timeFilter(Timestamp)\n| where RunId == '$run_id'\n| project Timestamp, Level, ErrorCode, Subsystem, Message\n| order by Timestamp desc\n| take 200"
+        }
+      ]
+    }
+  ]
+}

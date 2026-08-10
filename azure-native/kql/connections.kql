@@ -1,0 +1,41 @@
+// connections.kql — connection health from platform metrics
+//
+// Input:    AzureMetrics (platform metrics routed to Log Analytics by the diagnostic setting)
+// Consumed by: azure-native/workbooks/, azure-native/alerts/
+//
+// Metric names on Flexible Server mix two conventions and are CASE-SENSITIVE:
+// snake_case for platform metrics (aborted_connections, active_connections, total_connections)
+// and MySQL's own capitalisation for engine counters (Threads_running, Queries, Slow_queries).
+// Getting the case wrong returns an empty result, not an error.
+//
+// AzureMetrics rows are pre-aggregated per minute: Total/Average/Maximum/Minimum are already
+// computed, so aggregate the right column rather than summing raw values.
+
+let lookback = 24h;
+let bucket = 5m;
+AzureMetrics
+| where TimeGenerated > ago(lookback)
+| where MetricName in ('active_connections', 'total_connections', 'aborted_connections', 'Threads_running')
+| summarize
+    Avg = avg(Average),
+    Max = max(Maximum),
+    Total = sum(Total)
+  by bin(TimeGenerated, bucket), MetricName, Resource
+| order by TimeGenerated asc
+
+// --- Aborted-connection ratio ----------------------------------------------------------
+// A raw count of aborted connections is unreadable across workloads of different sizes.
+// The ratio against total connections is comparable between a benchmark run and production.
+//
+// With require_secure_transport=ON, a client that has not been configured for TLS fails the
+// handshake and lands here — it never reaches the error log. A deploy that forgets TLS
+// therefore shows up as a step change in this ratio and nowhere else.
+//
+// AzureMetrics
+// | where TimeGenerated > ago(24h)
+// | where MetricName in ('aborted_connections', 'total_connections')
+// | summarize Value = sum(Total) by bin(TimeGenerated, 5m), MetricName
+// | evaluate pivot(MetricName, sum(Value))
+// | extend AbortedRatio = iff(total_connections > 0, aborted_connections * 1.0 / total_connections, 0.0)
+// | project TimeGenerated, aborted_connections, total_connections, AbortedRatio
+// | order by TimeGenerated asc

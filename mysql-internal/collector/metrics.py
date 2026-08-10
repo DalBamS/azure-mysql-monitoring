@@ -83,3 +83,18 @@ def heartbeat(env: Envelope, ts: datetime | None = None) -> dict[str, Any]:
     a MySQL outage and distinguishes "database down" from "collector down".
     """
     return env.metric(ts or utc_now(), "collector", "collector_heartbeat", 1.0)
+
+
+def cycle_duration(
+    env: Envelope, elapsed_seconds: float, ts: datetime | None = None
+) -> dict[str, Any]:
+    """How long one full poll took.
+
+    Emitted because the collector shares the sampling interval with the work it measures: once
+    a cycle takes longer than the interval, samples stop being evenly spaced and every rate
+    derived from them is understated. That degradation is gradual and otherwise invisible —
+    the data keeps arriving, it is just quietly wrong.
+    """
+    return env.metric(
+        ts or utc_now(), "collector", "collector_cycle_duration_ms", elapsed_seconds * 1000.0
+    )

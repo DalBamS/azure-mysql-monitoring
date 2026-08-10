@@ -24,7 +24,7 @@ from config import Config, ConfigError
 from connection import assert_tls, connect, server_identity
 from envelope import Envelope, utc_now
 from events import ErrorLogReader
-from metrics import collect_global_status, collect_statement_digests, heartbeat
+from metrics import collect_global_status, collect_statement_digests, cycle_duration, heartbeat
 from sinks import build_sink
 
 log = logging.getLogger("collector")
@@ -128,6 +128,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def _run_loop(args: Any, conn: Any, env: Envelope, reader: ErrorLogReader, sinks: list) -> int:
     cycle = 0
+    last_cycle_seconds: float | None = None
     log.info("polling every %.1fs with sinks: %s",
              args.interval, ", ".join(s.name for s in sinks))
 
@@ -139,6 +140,11 @@ def _run_loop(args: Any, conn: Any, env: Envelope, reader: ErrorLogReader, sinks
         # The heartbeat is emitted first, before anything that can fail. That is what makes
         # "collector alive but MySQL unreachable" distinguishable from "collector dead".
         batch = [heartbeat(env, ts)]
+
+        # The previous cycle's duration rather than this one's, because a cycle is only fully
+        # measured once its sink writes finish — and by then the batch has already shipped.
+        if last_cycle_seconds is not None:
+            batch.append(cycle_duration(env, last_cycle_seconds, ts))
 
         try:
             batch.extend(collect_global_status(conn, env, ts))
@@ -167,6 +173,7 @@ def _run_loop(args: Any, conn: Any, env: Envelope, reader: ErrorLogReader, sinks
         # Subtract the work already done so the sampling interval stays honest under load —
         # otherwise the effective interval drifts and rate calculations skew.
         elapsed = time.monotonic() - started
+        last_cycle_seconds = elapsed
         sleep_for = max(0.0, args.interval - elapsed)
         if sleep_for == 0.0:
             log.warning("cycle %d took %.2fs, longer than the %.1fs interval",

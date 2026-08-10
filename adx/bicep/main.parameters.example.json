@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "clusterName": {
+      "value": "REPLACE-lowercase-alphanumeric-max22"
+    },
+    "databaseName": {
+      "value": "mysqlmonitoring"
+    },
+    "skuName": {
+      "value": "Standard_D11_v2"
+    },
+    "skuTier": {
+      "value": "Standard"
+    },
+    "capacity": {
+      "value": 2
+    },
+    "collectorPrincipalId": {
+      "value": ""
+    },
+    "grafanaPrincipalId": {
+      "value": ""
+    },
+    "operatorPrincipalId": {
+      "value": ""
+    },
+    "assignOperatorAdmin": {
+      "value": false
+    }
+  }
+}
