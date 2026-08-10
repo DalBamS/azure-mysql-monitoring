@@ -22,6 +22,17 @@ param operatorPrincipalId string
 @allowed(['User', 'Group', 'ServicePrincipal'])
 param operatorPrincipalType string = 'User'
 
+@description('''
+Explicitly assign the operator Admin on the database.
+
+Leave this false when the operator is also the principal that deployed the cluster: ADX grants
+the database creator Admin automatically, under a server-generated GUID name. A second
+assignment for the same principal and role is rejected with "A PrincipalAssignment resource
+already exists with the same role and principal id", which fails the whole deployment after the
+cluster has already been paid for. Set it true only when the operator differs from the deployer.
+''')
+param assignOperatorAdmin bool = false
+
 @description('Grafana managed identity principal ID. Empty skips the Grafana assignments.')
 param grafanaPrincipalId string = ''
 
@@ -39,8 +50,8 @@ resource database 'Microsoft.Kusto/clusters/databases@2023-08-15' existing = {
 
 // The operator applies table DDL, mappings, policies and materialized views, then queries
 // them back during verification. That requires Admin on the database — but only on this
-// database, never on the cluster.
-resource operatorAdmin 'Microsoft.Kusto/clusters/databases/principalAssignments@2023-08-15' = {
+// database, never on the cluster. Usually already granted implicitly; see assignOperatorAdmin.
+resource operatorAdmin 'Microsoft.Kusto/clusters/databases/principalAssignments@2023-08-15' = if (assignOperatorAdmin) {
   parent: database
   name: guid(database.id, operatorPrincipalId, 'Admin')
   properties: {
@@ -52,6 +63,8 @@ resource operatorAdmin 'Microsoft.Kusto/clusters/databases/principalAssignments@
 }
 
 // Grafana reads and nothing else. A compromised dashboard cannot drop a table.
+// Principal assignments on one database are applied serially by the service, so this waits on
+// the operator assignment when that one is enabled.
 resource grafanaViewer 'Microsoft.Kusto/clusters/databases/principalAssignments@2023-08-15' = if (!empty(grafanaPrincipalId)) {
   parent: database
   name: guid(database.id, grafanaPrincipalId, 'Viewer')
@@ -78,4 +91,4 @@ resource grafanaMonitoringReader 'Microsoft.Authorization/roleAssignments@2022-0
   }
 }
 
-output operatorAssignmentId string = operatorAdmin.id
+output operatorAssignmentId string = assignOperatorAdmin ? operatorAdmin.id : ''

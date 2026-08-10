@@ -21,8 +21,12 @@ Monitoring for **Azure Database for MySQL Flexible Server**. Two use cases share
 - `caching_sha2_password` is the **default authentication plugin**.
   `mysql_native_password` is **disabled by default** — never assume it, never suggest
   falling back to it, and never generate `CREATE USER ... IDENTIFIED WITH mysql_native_password`.
-- `innodb_redo_log_capacity` **replaces** `innodb_log_file_size` / `innodb_log_files_in_group`.
-  Use the new variable in all queries, tuning docs, and dashboards.
+- `innodb_redo_log_capacity` **supersedes** `innodb_log_file_size` / `innodb_log_files_in_group`.
+  Use the new variable in all queries, tuning docs, and dashboards. Note that the legacy
+  variable is **deprecated, not removed**: Azure MySQL 8.4.9 still returns
+  `innodb_log_file_size` from `SHOW VARIABLES`, and it is ignored when capacity is set. So do
+  not test for its absence — reading it back gives a stale number that no longer governs
+  anything, which is worse than an error.
 - Azure enforces TLS: `require_secure_transport=ON`. **All clients must connect with SSL.**
   Every connection helper must set SSL options explicitly (e.g. `ssl_disabled=False`,
   CA bundle where required). Never generate a connection that disables TLS.

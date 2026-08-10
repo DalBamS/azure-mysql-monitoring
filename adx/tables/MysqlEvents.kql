@@ -18,6 +18,4 @@
     Message:   string
 )
 
-.alter-merge table MysqlEvents docstring
-    "MySQL error-log entries read incrementally from the performance_schema.error_log ring "
-    "buffer. The only route to error-log content on Azure Flexible Server."
+.alter table MysqlEvents docstring "MySQL error-log entries read incrementally from the performance_schema.error_log ring buffer. The only route to error-log content on Azure Flexible Server."

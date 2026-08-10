@@ -16,12 +16,28 @@ exist on the real platform.
 |---|---|---|
 | MySQL Flexible Server 8.4 (`Standard_B1ms`) | target | The server being monitored |
 | Log Analytics workspace + diagnostic settings | 1 | Slow logs, audit logs, platform metrics |
-| Azure Data Explorer (`Dev(No SLA)_Standard_E2a_v4`) | store | Unified metrics + events store |
+| Azure Data Explorer (`Dev(No SLA)_Standard_D11_v2`) | store | Unified metrics + events store |
 | Azure Managed Grafana (**Standard**) | 3 | Final view over both data sources |
 
 Standard tier on Grafana is not a preference: the ADX data source does not exist on the
 deprecated Essential tier, so an Essential workspace would deploy successfully and then be
 unable to display any collector data.
+
+Azure retires Grafana major versions on its own schedule and rejects a retired one at
+deployment time, so `grafanaMajorVersion` is a parameter rather than a constant. Version 12 is
+the current default; if a deployment fails with `GrafanaMajorVersionNotSupported`, the error
+message lists the versions the service accepts that day.
+
+Dev-tier ADX SKU availability is region-specific and neither `what-if` nor `bicep build` catches
+a bad one — the cluster fails 10 minutes into the deployment with `The sku X is not supported in
+<region>`. `koreacentral` offers only `Dev(No SLA)_Standard_D11_v2`, which is the default. For
+another region, check first and pass `-AdxSkuName`:
+
+```powershell
+az kusto cluster list-sku -o json | ConvertFrom-Json |
+  Where-Object { $_.locations -contains '<region>' -and $_.tier -eq 'Basic' } |
+  Select-Object -ExpandProperty name
+```
 
 ## Layout
 
@@ -33,6 +49,7 @@ unable to display any collector data.
 | `scripts/load-env.ps1` | Loads `.env` into the shell (**dot-source it**) |
 | `scripts/bootstrap_adx.py` | Applies the committed `.kql` schema to the live cluster |
 | `scripts/workload.py` | Generates database load so counters actually move |
+| `scripts/update-firewall.ps1` | Repoints the firewall rule after your public IP changes |
 | `scripts/teardown.ps1` | Deletes everything; tag-guarded against pointing at production |
 | `verify.py` | The end-to-end check — PASS/FAIL per assertion |
 
@@ -72,6 +89,24 @@ Steps 5 and 6 must overlap. Running the collector against an idle server produce
 series, which is indistinguishable from a broken collector — the exact false negative this
 environment exists to rule out.
 
+## Troubleshooting
+
+**`2003: Can't connect to MySQL server ... (timed out)` on a connection that worked earlier.**
+The server is IP-restricted and consumer ISPs reassign public addresses without warning. The
+symptom is a bare TCP timeout, identical to an outage or a wrong hostname:
+
+```powershell
+./scripts/update-firewall.ps1 -ResourceGroup mysql-mon-test
+```
+
+**`UnicodeEncodeError: 'cp949' codec can't encode character`.** A legacy Windows console code
+page. `verify.py` reconfigures its own streams to UTF-8; if another script hits this, run
+`chcp 65001` first.
+
+**`az` fails with `EOF when reading a line`.** The CLI is prompting to install a missing
+extension and there is no TTY to answer. Set
+`AZURE_EXTENSION_USE_DYNAMIC_INSTALL=yes_without_prompt` — `verify.py` already does.
+
 ## What each check proves
 
 `verify.py` is not a deployment smoke test. It probes the assumptions the documentation in
@@ -82,7 +117,7 @@ producing empty dashboards in production.
 |---|---|
 | Connection is encrypted (`Ssl_cipher` non-empty) | `require_secure_transport=ON` is configured but not enforced |
 | MySQL version is 8.4 | Metric names and variables in the repo may not match |
-| `innodb_redo_log_capacity` exists, `innodb_log_file_size` gone | The 8.4 rename the repo depends on is wrong |
+| `innodb_redo_log_capacity` exists and supersedes `innodb_log_file_size` | The 8.4 redo-log change the repo depends on is wrong |
 | `performance_schema.error_log` readable | **No error-log source exists at all** — Layer 1 has no such category to fall back on |
 | Heartbeat emitted every cycle | A dead collector would flatline and read as healthy |
 | Every row tagged `run_id` + `tier` | Benchmark runs could not be joined or told apart |
@@ -95,6 +130,19 @@ producing empty dashboards in production.
 
 Exit code is `0` when every check passes, `1` when any fails. `--json` writes
 `runs/verify-report.json` for CI.
+
+### Last verified
+
+All 28 checks passed against a live deployment in `koreacentral` on 2026-08-10, against
+**MySQL 8.4.9-azure**. Findings worth keeping:
+
+- `performance_schema.error_log` **is** readable on Flexible Server (98 buffered entries). This
+  was the repository's biggest open assumption, and Layer 1 has no fallback if it were wrong.
+- `AzureDiagnostics` returned exactly `MySqlSlowLogs` and `MySqlAuditLogs`, confirming there is
+  no error-log category.
+- Streaming ingestion delivered a probe row end to end in **6.5s**, well inside the documented
+  25-45s detection budget.
+- `innodb_log_file_size` is still exposed (deprecated, ignored), so absence is the wrong test.
 
 ## Configuration
 

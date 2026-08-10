@@ -15,9 +15,9 @@
     Value:     real
 )
 
-.alter-merge table MysqlMetrics docstring
-    "Numeric samples collected from MySQL 8.4 by mysql-internal/collector. Values are raw "
-    "cumulative counters; derive rates at query time so counter resets stay visible."
+// `.alter table ... docstring` is the only accepted form here — `.alter-merge` is rejected for
+// docstrings, and KQL does not concatenate adjacent string literals, so this stays one string.
+.alter table MysqlMetrics docstring "Numeric samples collected from MySQL 8.4 by mysql-internal/collector. Values are raw cumulative counters; derive rates at query time so counter resets stay visible."
 
 // Ordering the index by Metric first makes the common dashboard filter (one metric across a
 // time range) hit far fewer extents than the default column order would.

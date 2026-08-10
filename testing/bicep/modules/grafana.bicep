@@ -25,6 +25,10 @@ param adminPrincipalId string = ''
 @allowed(['User', 'Group', 'ServicePrincipal'])
 param adminPrincipalType string = 'User'
 
+@description('Grafana major version. Azure rejects retired versions, so this is a parameter.')
+@allowed(['12', '13'])
+param grafanaMajorVersion string = '12'
+
 resource grafana 'Microsoft.Dashboard/grafana@2023-09-01' = {
   name: grafanaName
   location: location
@@ -40,7 +44,10 @@ resource grafana 'Microsoft.Dashboard/grafana@2023-09-01' = {
     zoneRedundancy: 'Disabled'
     apiKey: 'Disabled'
     deterministicOutboundIP: 'Disabled'
-    grafanaMajorVersion: '11'
+    // Azure retires Grafana major versions on its own schedule; the service currently accepts
+    // only 12 and 13. Pin the lower supported version so dashboard JSON stays portable, and
+    // expect this to need bumping again when 12 is retired.
+    grafanaMajorVersion: grafanaMajorVersion
   }
 }
 

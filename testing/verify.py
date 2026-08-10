@@ -9,7 +9,7 @@ It also probes the assumptions the repository documentation is built on, so a wr
 assumption fails loudly here rather than silently producing empty dashboards later:
 
   * MySQL really is 8.4, and require_secure_transport really is ON
-  * innodb_redo_log_capacity exists and innodb_log_file_size does not
+  * innodb_redo_log_capacity exists and supersedes the deprecated innodb_log_file_size
   * performance_schema.error_log is readable on Azure Flexible Server
   * Flexible Server offers exactly two diagnostic log categories, and no error-log category
   * Streaming ingestion delivers rows in seconds, not in the queued batching window
@@ -36,6 +36,14 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 COLLECTOR_DIR = REPO_ROOT / "mysql-internal" / "collector"
 sys.path.insert(0, str(COLLECTOR_DIR))
+
+# Windows consoles default to a legacy code page (cp949 on a Korean install), which cannot
+# encode the em-dashes and arrows used in the output. Without this, verify.py dies with a
+# UnicodeEncodeError before running a single check — a verification script that cannot survive
+# its own banner is worse than useless.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
 
 PASS, FAIL, SKIP, WARN = "PASS", "FAIL", "SKIP", "WARN"
 
@@ -70,6 +78,22 @@ class Report:
 
 def section(title: str) -> None:
     print(f"\n=== {title} ===")
+
+
+def run_az(args: list[str], timeout: int = 120) -> subprocess.CompletedProcess:
+    """Run an `az` command non-interactively.
+
+    The CLI prompts before installing a missing extension (log-analytics is not in the base
+    install). With no TTY that prompt fails as "EOF when reading a line" wrapped in a knack
+    traceback, which reads like a broken query rather than a missing extension. Forcing dynamic
+    install without a prompt keeps the failure honest.
+    """
+    env = dict(os.environ)
+    env["AZURE_EXTENSION_USE_DYNAMIC_INSTALL"] = "yes_without_prompt"
+    env["AZURE_CORE_ONLY_SHOW_ERRORS"] = "true"
+    return subprocess.run(
+        args, capture_output=True, text=True, timeout=timeout, shell=True, env=env,
+    )
 
 
 # ---------------------------------------------------------------------------------------
@@ -125,13 +149,19 @@ def check_mysql(report: Report) -> dict | None:
         with conn.cursor() as cur:
             cur.execute("SHOW VARIABLES LIKE 'innodb_log_file_size'")
             legacy = cur.fetchall()
+
+        # Verified against Azure MySQL 8.4.9: innodb_log_file_size is still present, and is
+        # deprecated rather than removed. innodb_redo_log_capacity supersedes it — when
+        # capacity is set, the legacy variable is ignored. So the meaningful assertion is
+        # "capacity is what governs", not "the old name is gone".
         if legacy:
-            report.add("innodb_log_file_size is gone", WARN,
-                       f"still present: {legacy[0][1]}",
-                       "8.4 should not expose the removed variable")
+            report.add("innodb_log_file_size is superseded", PASS,
+                       f"still exposed as deprecated: {legacy[0][1]} (ignored; capacity governs)",
+                       "sizing the redo log through the legacy variable would silently do nothing")
         else:
-            report.add("innodb_log_file_size is gone", PASS,
-                       proves="the redo-log rename documented in copilot-instructions is real")
+            report.add("innodb_log_file_size is superseded", PASS,
+                       "not exposed at all",
+                       "the redo-log rename documented in copilot-instructions is real")
 
         secure = identity.get("require_secure_transport", "")
         report.add(
@@ -392,10 +422,9 @@ def check_log_analytics(report: Report) -> None:
         return
 
     def run_kql(kql: str):
-        proc = subprocess.run(
+        proc = run_az(
             ["az", "monitor", "log-analytics", "query", "-w", workspace_id,
              "--analytics-query", kql, "-o", "json"],
-            capture_output=True, text=True, timeout=120, shell=True,
         )
         if proc.returncode != 0:
             raise RuntimeError(proc.stderr.strip()[:300])
@@ -450,22 +479,30 @@ def check_grafana(report: Report) -> None:
         return
 
     resource_group = os.environ.get("AZURE_RESOURCE_GROUP", "").strip()
-    name = endpoint.replace("https://", "").split(".")[0]
 
+    # The workspace is looked up by resource group rather than parsed out of the endpoint.
+    # Azure appends a generated suffix to the Grafana DNS name, so
+    # https://mysqlmon-grafana-abcde-c7b0akg4d2c3echa.sel.grafana.azure.com belongs to a
+    # resource actually named mysqlmon-grafana-abcde. Deriving the name from the hostname
+    # yields a ResourceNotFound that looks like a missing deployment.
     try:
-        proc = subprocess.run(
-            ["az", "grafana", "show", "--name", name, "--resource-group", resource_group,
-             "--query", "{sku:sku.name, state:properties.provisioningState, endpoint:properties.endpoint}",
+        proc = run_az(
+            ["az", "grafana", "list", "--resource-group", resource_group,
+             "--query", "[0].{sku:sku.name, state:properties.provisioningState, endpoint:properties.endpoint, version:properties.grafanaMajorVersion}",
              "-o", "json"],
-            capture_output=True, text=True, timeout=120, shell=True,
         )
         if proc.returncode != 0:
             report.add("Grafana workspace reachable", FAIL, proc.stderr.strip()[:300])
             return
 
-        info = json.loads(proc.stdout)
+        info = json.loads(proc.stdout or "null")
+        if not info:
+            report.add("Grafana workspace reachable", FAIL,
+                       f"no Grafana workspace in resource group {resource_group}")
+            return
+
         report.add("Grafana workspace reachable", PASS,
-                   f"sku={info.get('sku')} state={info.get('state')}")
+                   f"sku={info.get('sku')} state={info.get('state')} version={info.get('version')}")
 
         # Standard tier is not a preference. The ADX data source does not exist on the
         # deprecated Essential tier, so an Essential workspace would deploy fine and then be

@@ -9,12 +9,15 @@
 // SHOW GLOBAL STATUS values are cumulative. A server restart resets them, which produces a
 // large negative delta. That delta is discarded rather than plotted, but the reset itself
 // stays visible in the raw table.
+//
+// The window parameters are startTime/endTime rather than from/to: `from` and `to` are KQL
+// keywords, and using them as parameter names is rejected at function creation time.
 
 .create-or-alter function with (docstring="Per-second rate of a cumulative counter, reset-safe", folder="mysql")
-    CounterRate(metricName: string, runId: string, from: datetime, to: datetime)
+    CounterRate(metricName: string, runId: string, startTime: datetime, endTime: datetime)
 {
     MysqlMetrics
-    | where Timestamp between (from .. to)
+    | where Timestamp between (startTime .. endTime)
     | where Metric == metricName and RunId == runId
     | order by Host asc, Timestamp asc
     | extend PrevValue = prev(Value), PrevTs = prev(Timestamp), PrevHost = prev(Host)

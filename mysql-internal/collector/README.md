@@ -80,7 +80,8 @@ python collector.py --interval 5 --sink jsonl --out "..\..\benchmark-integration
   fall back to an unencrypted connection.
 - MySQL 8.4 uses **`caching_sha2_password`** by default (`mysql_native_password` is disabled);
   the driver must support it.
-- Read `innodb_redo_log_capacity`, not the removed `innodb_log_file_size`.
+- Read `innodb_redo_log_capacity`, not the deprecated `innodb_log_file_size` (still exposed on
+  8.4, but ignored once capacity is set).
 - **All timestamps are UTC ISO-8601** — emit timezone-aware values, never naive or local time.
 - **Every row includes `RUN_ID`** plus the sampled server identity and tier, so v1 and v2 runs stay
   distinguishable.

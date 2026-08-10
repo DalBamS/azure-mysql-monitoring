@@ -24,7 +24,8 @@ sampling cadence it is designed for.
 
 - **MySQL 8.4 only.** Do not use syntax, variables, or `performance_schema` tables that were
   removed or renamed in 8.4.
-  - Use `innodb_redo_log_capacity`; `innodb_log_file_size` no longer applies.
+  - Use `innodb_redo_log_capacity`; `innodb_log_file_size` is deprecated and, although still
+    returned by `SHOW VARIABLES`, no longer governs redo-log sizing.
   - Assume `caching_sha2_password` is the default auth plugin.
 - **No ORM** — these are raw SQL statements executed by the collector.
 - Queries are **read-only**. No `SET GLOBAL`, no DDL, no writes.

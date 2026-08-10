@@ -32,6 +32,8 @@ param(
 
     [string]$DatabaseName = 'monitoring_test',
 
+    [string]$AdxSkuName = 'Dev(No SLA)_Standard_D11_v2',
+
     [switch]$SkipAdx,
 
     [switch]$SkipGrafana,
@@ -122,11 +124,26 @@ $deployArgs = @(
     "clientIpAddress=$publicIp",
     "operatorPrincipalId=$operatorObjectId",
     "deployAdx=$($deployAdx.ToString().ToLower())",
-    "deployGrafana=$($deployGrafana.ToString().ToLower())"
+    "deployGrafana=$($deployGrafana.ToString().ToLower())",
+    "adxSkuName=$AdxSkuName"
 )
 
+# ARM reports "At least one resource deployment operation failed" and nothing else, so surface
+# the per-resource errors here. Otherwise every failure costs three extra commands to diagnose.
 az @deployArgs --output none
-if ($LASTEXITCODE -ne 0) { throw 'Deployment failed.' }
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "`nDeployment failed. Per-resource errors:" -ForegroundColor Red
+    foreach ($name in @($deploymentName, 'mysql', 'monitoring', 'adx', 'grafana', 'roles')) {
+        $ops = az deployment operation group list --resource-group $ResourceGroup --name $name `
+            --query "[?properties.provisioningState=='Failed'].{resource:properties.targetResource.resourceName, message:properties.statusMessage}" `
+            -o json 2>$null | ConvertFrom-Json
+        foreach ($op in $ops) {
+            $message = $op.message.error.message
+            if ($message) { Write-Host "  [$name] $($op.resource): $message" -ForegroundColor Red }
+        }
+    }
+    throw 'Deployment failed.'
+}
 
 if ($WhatIf) {
     Write-Host "`nWhat-if complete; nothing was created." -ForegroundColor Yellow

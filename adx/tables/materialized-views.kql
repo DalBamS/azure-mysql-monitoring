@@ -5,10 +5,15 @@
 // trends survive for a year. This is the mechanism that stops growing log volume from
 // scaling cost linearly.
 //
-// backfill=true processes existing data at creation. On an empty test cluster it is instant;
-// on a populated production cluster it is a heavier one-off operation.
+// `backfill` is deliberately absent. ADX accepts it only on creation and rejects it on the
+// alter path, so a `.create-or-alter` carrying it succeeds once and then fails on every
+// re-run — which breaks bootstrap_adx.py's idempotency. The views are created alongside their
+// empty source tables, so there is nothing to backfill. Backfilling an already-populated table
+// is a deliberate one-off:
+//
+//   .create materialized-view with (backfill=true) MysqlMetrics1m on table MysqlMetrics { ... }
 
-.create-or-alter materialized-view with (backfill=true, docstring="1-minute rollup of MysqlMetrics for long-range dashboards")
+.create-or-alter materialized-view with (docstring="1-minute rollup of MysqlMetrics for long-range dashboards")
     MysqlMetrics1m on table MysqlMetrics
 {
     MysqlMetrics
@@ -22,7 +27,7 @@
 
 // Events are low-volume text, so they are not rolled up. This view instead gives dashboards
 // a cheap error-rate series without scanning message bodies.
-.create-or-alter materialized-view with (backfill=true, docstring="1-minute error/warning counts by subsystem")
+.create-or-alter materialized-view with (docstring="1-minute error/warning counts by subsystem")
     MysqlEvents1m on table MysqlEvents
 {
     MysqlEvents

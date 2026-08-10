@@ -52,6 +52,9 @@ param deployAdx bool = true
 @description('Deploy Azure Managed Grafana (Standard). Costs money while running.')
 param deployGrafana bool = true
 
+@description('ADX Dev-tier SKU. Availability varies by region; koreacentral only offers D11_v2.')
+param adxSkuName string = 'Dev(No SLA)_Standard_D11_v2'
+
 // A short suffix keeps globally-unique names (MySQL FQDN, ADX cluster) collision-free
 // across repeated deploy/teardown cycles in the same subscription.
 var suffix = substring(uniqueString(resourceGroup().id), 0, 5)
@@ -94,6 +97,7 @@ module adx 'modules/adx.bicep' = if (deployAdx) {
     location: location
     databaseName: 'mysqlmonitoring'
     tags: tags
+    skuName: adxSkuName
   }
 }
 

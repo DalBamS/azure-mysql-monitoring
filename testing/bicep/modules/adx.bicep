@@ -1,7 +1,11 @@
 // modules/adx.bicep — Azure Data Explorer cluster and database (the unified store).
 //
-// Dev(No SLA)_Standard_E2a_v4 is the cheapest SKU that still supports streaming ingestion,
-// which is the whole point of the hot path. Two settings matter more than the SKU:
+// The SKU is a parameter because Dev SKU availability is region-specific: koreacentral offers
+// only Dev(No SLA)_Standard_D11_v2, while other regions carry the newer E2a_v4. Deploying an
+// unavailable SKU fails at the cluster with "The sku X is not supported in <region>", so check
+// `az kusto cluster list-sku` for the target region before changing the default.
+//
+// Two settings matter more than the SKU:
 //
 //   enableStreamingIngest: true   — without it the table-level streaming policy in
 //                                   adx/policies/policies.kql cannot be enabled, and
@@ -31,12 +35,15 @@ param hotCachePeriod string = 'P7D'
 @description('Soft-delete (retention) period for the database default.')
 param softDeletePeriod string = 'P30D'
 
+@description('Dev-tier SKU name. Availability is region-specific; verify with `az kusto cluster list-sku`.')
+param skuName string = 'Dev(No SLA)_Standard_D11_v2'
+
 resource cluster 'Microsoft.Kusto/clusters@2023-08-15' = {
   name: clusterName
   location: location
   tags: tags
   sku: {
-    name: 'Dev(No SLA)_Standard_E2a_v4'
+    name: skuName
     tier: 'Basic'
     capacity: 1
   }
