@@ -1,0 +1,33 @@
+// mappings.kql — JSON ingestion mappings for the JSONL the collector emits.
+//
+// The SAME mapping serves the streaming (hot) and queued (cold) paths, which is what
+// guarantees a JSONL file replayed months later produces rows identical to those ingested
+// live. Field names here must match collector/envelope.py exactly.
+
+.create-or-alter table MysqlMetrics ingestion json mapping "MysqlMetricsMapping"
+```
+[
+  {"column":"Timestamp","Properties":{"Path":"$.ts"}},
+  {"column":"RunId",    "Properties":{"Path":"$.run_id"}},
+  {"column":"Host",     "Properties":{"Path":"$.host"}},
+  {"column":"Tier",     "Properties":{"Path":"$.tier"}},
+  {"column":"Source",   "Properties":{"Path":"$.source"}},
+  {"column":"Metric",   "Properties":{"Path":"$.metric"}},
+  {"column":"Value",    "Properties":{"Path":"$.value"}}
+]
+```
+
+.create-or-alter table MysqlEvents ingestion json mapping "MysqlEventsMapping"
+```
+[
+  {"column":"Timestamp","Properties":{"Path":"$.ts"}},
+  {"column":"RunId",    "Properties":{"Path":"$.run_id"}},
+  {"column":"Host",     "Properties":{"Path":"$.host"}},
+  {"column":"Tier",     "Properties":{"Path":"$.tier"}},
+  {"column":"Source",   "Properties":{"Path":"$.source"}},
+  {"column":"Level",    "Properties":{"Path":"$.level"}},
+  {"column":"ErrorCode","Properties":{"Path":"$.error_code"}},
+  {"column":"Subsystem","Properties":{"Path":"$.subsystem"}},
+  {"column":"Message",  "Properties":{"Path":"$.message"}}
+]
+```

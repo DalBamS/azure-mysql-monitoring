@@ -5,6 +5,11 @@
 *.pem
 *.key
 azure-native/bicep/main.parameters.json
+testing/bicep/main.parameters.json
+
+# Test environment output — .env holds a generated MySQL password
+testing/.env
+testing/runs/
 
 # Benchmark run output
 benchmark-integration/runs/

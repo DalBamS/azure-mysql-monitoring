@@ -1,0 +1,30 @@
+// materialized-views.kql — 1-minute rollups.
+//
+// Long-range dashboards must not scan raw data. A materialized view keeps rollups current
+// without a scheduled job, and is what lets raw MysqlMetrics expire after 30 days while
+// trends survive for a year. This is the mechanism that stops growing log volume from
+// scaling cost linearly.
+//
+// backfill=true processes existing data at creation. On an empty test cluster it is instant;
+// on a populated production cluster it is a heavier one-off operation.
+
+.create-or-alter materialized-view with (backfill=true, docstring="1-minute rollup of MysqlMetrics for long-range dashboards")
+    MysqlMetrics1m on table MysqlMetrics
+{
+    MysqlMetrics
+    | summarize
+        Avg     = avg(Value),
+        Max     = max(Value),
+        Min     = min(Value),
+        Samples = count()
+      by bin(Timestamp, 1m), RunId, Host, Tier, Metric
+}
+
+// Events are low-volume text, so they are not rolled up. This view instead gives dashboards
+// a cheap error-rate series without scanning message bodies.
+.create-or-alter materialized-view with (backfill=true, docstring="1-minute error/warning counts by subsystem")
+    MysqlEvents1m on table MysqlEvents
+{
+    MysqlEvents
+    | summarize Events = count() by bin(Timestamp, 1m), RunId, Host, Tier, Level, Subsystem
+}

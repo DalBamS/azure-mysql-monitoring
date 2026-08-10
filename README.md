@@ -143,6 +143,27 @@ flatlined chart otherwise reads as healthy.
 | [`grafana/datasources/`](grafana/datasources/) | ADX + Azure Monitor data source provisioning |
 | [`grafana/provisioning/`](grafana/provisioning/) | Providers, folders, deployment wiring |
 | [`benchmark-integration/`](benchmark-integration/) | Joins benchmark output with collector metrics |
+| [`testing/`](testing/) | Real-Azure test environment and end-to-end verification |
+
+## Verifying it works
+
+The pipeline is verifiable against real Azure resources — there is no emulator path, because
+the things most likely to be wrong (enforced TLS, diagnostic log categories, streaming
+ingestion latency, managed-identity permissions) only exist on the real platform.
+
+```powershell
+cd testing
+./scripts/deploy.ps1 -ResourceGroup mysql-mon-test   # MySQL 8.4 + LAW + ADX + Grafana
+. ./scripts/load-env.ps1
+python scripts/bootstrap_adx.py                      # apply the committed .kql schema
+python scripts/workload.py --seconds 300             # in a second shell
+python ../mysql-internal/collector/collector.py --interval 5 --sink jsonl --sink adx-streaming --max-cycles 40
+python verify.py
+./scripts/teardown.ps1 -ResourceGroup mysql-mon-test
+```
+
+`verify.py` asserts behaviour rather than deployment success, and states what each failure
+would mean. See [`testing/README.md`](testing/README.md).
 
 ## MySQL 8.4 notes
 

@@ -1,0 +1,23 @@
+// MysqlEvents.kql — text events from performance_schema.error_log.
+//
+// Kept in a separate table from MysqlMetrics deliberately: the schemas, retention and query
+// patterns differ, and mixing them would force every numeric query to filter out text rows.
+//
+// This table holds data Layer 1 cannot supply at all — Flexible Server exposes no error-log
+// diagnostic category, only MySQL Audit Logs and MySQL Slow Logs.
+
+.create-merge table MysqlEvents (
+    Timestamp: datetime,      // UTC, from error_log.LOGGED at microsecond precision
+    RunId:     string,
+    Host:      string,
+    Tier:      string,
+    Source:    string,        // error_log
+    Level:     string,        // System | Error | Warning | Note
+    ErrorCode: string,        // e.g. MY-012345
+    Subsystem: string,        // e.g. InnoDB, Server, Repl
+    Message:   string
+)
+
+.alter-merge table MysqlEvents docstring
+    "MySQL error-log entries read incrementally from the performance_schema.error_log ring "
+    "buffer. The only route to error-log content on Azure Flexible Server."

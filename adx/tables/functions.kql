@@ -1,0 +1,57 @@
+// functions.kql — stored functions shared by dashboards, alerts and the verification script.
+//
+// Defining these once in the cluster keeps grafana/dashboards/ thin and means a fix to the
+// counter-reset handling lands everywhere at once.
+
+// ---------------------------------------------------------------------------
+// CounterRate — turn a cumulative counter into a per-second rate
+// ---------------------------------------------------------------------------
+// SHOW GLOBAL STATUS values are cumulative. A server restart resets them, which produces a
+// large negative delta. That delta is discarded rather than plotted, but the reset itself
+// stays visible in the raw table.
+
+.create-or-alter function with (docstring="Per-second rate of a cumulative counter, reset-safe", folder="mysql")
+    CounterRate(metricName: string, runId: string, from: datetime, to: datetime)
+{
+    MysqlMetrics
+    | where Timestamp between (from .. to)
+    | where Metric == metricName and RunId == runId
+    | order by Host asc, Timestamp asc
+    | extend PrevValue = prev(Value), PrevTs = prev(Timestamp), PrevHost = prev(Host)
+    | where Host == PrevHost
+    | extend Seconds = datetime_diff('second', Timestamp, PrevTs)
+    | where Seconds > 0
+    | extend Delta = Value - PrevValue
+    | where Delta >= 0                      // drop the reset boundary, not the reset itself
+    | project Timestamp, Host, Tier, Metric, Rate = Delta / Seconds
+}
+
+// ---------------------------------------------------------------------------
+// CollectorHealth — is the collector alive?
+// ---------------------------------------------------------------------------
+// A dead collector flatlines every chart, and a flatline reads as a healthy idle server.
+// Absence of the heartbeat is therefore the signal, not the presence of a bad value.
+
+.create-or-alter function with (docstring="Seconds since the last heartbeat, per host", folder="mysql")
+    CollectorHealth(lookback: timespan = 15m)
+{
+    MysqlMetrics
+    | where Timestamp > ago(lookback)
+    | where Metric == "collector_heartbeat"
+    | summarize LastBeat = max(Timestamp) by Host, RunId
+    | extend SecondsSinceLastBeat = datetime_diff('second', now(), LastBeat)
+    | extend Status = iff(SecondsSinceLastBeat > 60, "DOWN", "OK")
+}
+
+// ---------------------------------------------------------------------------
+// StorageTierComparison — the benchmark question this repo exists to answer
+// ---------------------------------------------------------------------------
+
+.create-or-alter function with (docstring="Compare one metric across two benchmark runs", folder="benchmark")
+    StorageTierComparison(metricName: string, baselineRun: string, candidateRun: string)
+{
+    MysqlMetrics
+    | where Metric == metricName and RunId in (baselineRun, candidateRun)
+    | summarize Avg = avg(Value), P95 = percentile(Value, 95), Max = max(Value), Samples = count()
+      by RunId, Tier, Metric
+}

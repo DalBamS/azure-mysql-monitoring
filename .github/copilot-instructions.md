@@ -150,6 +150,22 @@ Azure Data Explorer data source is not available on the deprecated Essential tie
 - **Curate the metric allow-list.** MySQL 8.4 exposes 400+ status variables; keeping a curated ~80
   cuts ingestion volume roughly fivefold. Filter at collection, not downstream.
 
+## Testing — `testing/`
+
+Changes to the collector, the ADX schema, or the Bicep must be verifiable against **real Azure
+resources**. There is no emulator path: enforced TLS, diagnostic log categories, streaming
+ingestion latency and managed-identity permissions only exist on the real platform.
+
+- `testing/verify.py` is the contract. It asserts behaviour, not deployment success, and every
+  check states what a failure would mean.
+- **A new claim in a README needs a check in `verify.py`.** The documented limitations here
+  (no error-log category, the 8.4 redo-log rename, Standard-tier Grafana) are asserted, so they
+  stay proven rather than remembered.
+- Load and collection must overlap. Sampling an idle server produces a flat series that is
+  indistinguishable from a broken collector.
+- The test environment is ephemeral and tag-guarded. Tear it down; ADX and Grafana bill while
+  idle.
+
 ## Repository layout
 
 ```
@@ -172,6 +188,10 @@ azure-mysql-monitoring/
 │   ├── dashboards/          # Dashboard JSON models
 │   ├── datasources/         # ADX + Azure Monitor provisioning YAML
 │   └── provisioning/        # Providers, folders, deployment wiring
+├── testing/                 # Real-Azure test environment + end-to-end verification
+│   ├── bicep/               # Disposable test env: MySQL, LAW, ADX, Grafana
+│   ├── scripts/             # deploy / bootstrap / workload / teardown
+│   └── verify.py            # PASS-FAIL assertions over the whole pipeline
 └── benchmark-integration/   # Joins benchmark runs with collector output via RUN_ID
 ```
 
