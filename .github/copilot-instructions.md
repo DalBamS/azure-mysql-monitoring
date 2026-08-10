@@ -28,7 +28,7 @@ Monitoring for **Azure Database for MySQL Flexible Server**. Two use cases share
   CA bundle where required). Never generate a connection that disables TLS.
 - Prefer `performance_schema` over deprecated/removed status sources.
 
-## Architecture — two monitoring layers
+## Architecture — two collection layers, one view layer
 
 ### Layer 1 — `azure-native/`
 
@@ -52,6 +52,28 @@ A **Python collector** that polls the server directly:
 **Layer 2 is the primary data source during benchmark runs.** Premium SSD v2 servers are in
 **preview**, so Azure platform metrics and diagnostic logs may be incomplete or missing for them.
 When the two layers disagree during a benchmark, trust Layer 2 and note the discrepancy.
+
+### Layer 3 — `grafana/`
+
+**Grafana is the final monitoring view** — the single surface where Layer 1 and Layer 2 are shown
+on one time axis.
+
+- Presentation only. Grafana never collects data; it reads what Layers 1 and 2 already produce.
+- Two data sources: **Azure Monitor** (Layer 1, reusing the KQL in `azure-native/kql/`) and
+  **MySQL** (Layer 2, reading the collector's metrics table).
+- Dashboards are **JSON committed to this repo and provisioned**, never UI-only edits.
+- **`$run_id` is a template variable** on benchmark dashboards, so a v1 run and a v2 run can be
+  compared without editing panels.
+- Grafana's MySQL driver supports `caching_sha2_password` (the 8.4 default) — never suggest
+  switching the user to `mysql_native_password`. The data source must use **TLS `require`**, since
+  Azure enforces `require_secure_transport=ON`.
+- **Do not point Grafana at `SHOW GLOBAL STATUS` directly** — a live `SHOW` returns an
+  instantaneous snapshot that cannot be graphed. Grafana reads the collector's persisted rows,
+  which means the collector needs a **MySQL sink** with a `ts` (UTC) + `run_id` schema.
+- Set the MySQL data source `timezone` to **UTC** to match stored timestamps; a mismatch shifts
+  every panel and silently invalidates a v1 vs v2 comparison.
+- `azure-native/workbooks/` remains the Azure-native, portal-side view. Grafana is the primary
+  operator-facing dashboard.
 
 ## Security — non-negotiable
 
@@ -98,6 +120,10 @@ azure-mysql-monitoring/
 ├── mysql-internal/          # Layer 2: in-server telemetry
 │   ├── collector/           # Python collector
 │   └── sql/                 # SHOW GLOBAL STATUS / performance_schema queries
+├── grafana/                 # Layer 3: final monitoring view
+│   ├── dashboards/          # Dashboard JSON models
+│   ├── datasources/         # Azure Monitor + MySQL provisioning YAML
+│   └── provisioning/        # Providers, folders, deployment wiring
 └── benchmark-integration/   # Joins benchmark runs with collector output via RUN_ID
 ```
 

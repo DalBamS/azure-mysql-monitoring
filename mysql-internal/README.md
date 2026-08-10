@@ -26,6 +26,7 @@ flowchart LR
     SRV["MySQL 8.4 Flexible Server"] --> COL
     COL --> OUT["Metric rows<br/>UTC ISO-8601 + RUN_ID"]
     OUT --> BI["../benchmark-integration/"]
+    OUT --> GF["../grafana/ (final view)"]
 ```
 
 ## MySQL 8.4 requirements

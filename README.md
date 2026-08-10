@@ -38,6 +38,12 @@ flowchart TB
         REP["v1 vs v2 comparison report"]
     end
 
+    subgraph L3["Layer 3 — grafana/ (final view)"]
+        DSA["Azure Monitor data source"]
+        DSM["MySQL data source (TLS)"]
+        DASH["Dashboards<br/>$run_id template variable"]
+    end
+
     ENV["Environment variables<br/>MYSQL_HOST / MYSQL_USER<br/>MYSQL_PASSWORD / MYSQL_DB / RUN_ID"]
 
     SRV1 --> DIAG
@@ -56,6 +62,11 @@ flowchart TB
     OUT ==> |primary source during benchmarks| JOIN
     LAW --> |supplementary| JOIN
     JOIN --> REP
+
+    LAW --> DSA
+    OUT --> DSM
+    DSA --> DASH
+    DSM ==> |primary during benchmarks| DASH
 ```
 
 ### Why two layers
@@ -70,6 +81,22 @@ flowchart TB
 **Premium SSD v2 servers are in preview**, so Azure platform metrics and diagnostic logs may be
 incomplete for them. During benchmark runs, Layer 2 is the authoritative data source.
 
+### Layer 3 — Grafana is the final view
+
+[`grafana/`](grafana/) is the single surface that renders **both** collection layers on one time
+axis, via an Azure Monitor data source and a MySQL data source. It collects nothing itself.
+
+- Dashboards are JSON committed here and provisioned — not UI-only edits.
+- **`$run_id`** is a template variable, so a Premium SSD v1 run and a v2 run can be compared
+  without editing panels.
+- Grafana reads the collector's **persisted metrics table**, not `SHOW GLOBAL STATUS` directly —
+  a live `SHOW` returns a snapshot that cannot be graphed.
+- The MySQL data source uses TLS `require` (Azure enforces `require_secure_transport=ON`) and
+  `caching_sha2_password`, the MySQL 8.4 default.
+
+`azure-native/workbooks/` remains the Azure-native, portal-side view; Grafana is the primary
+operator-facing dashboard.
+
 ## Repository layout
 
 | Path | Purpose |
@@ -82,6 +109,10 @@ incomplete for them. During benchmark runs, Layer 2 is the authoritative data so
 | [`mysql-internal/`](mysql-internal/) | In-server telemetry (Layer 2) |
 | [`mysql-internal/collector/`](mysql-internal/collector/) | Python collector |
 | [`mysql-internal/sql/`](mysql-internal/sql/) | `SHOW GLOBAL STATUS` / `performance_schema` queries |
+| [`grafana/`](grafana/) | Final monitoring view (Layer 3) |
+| [`grafana/dashboards/`](grafana/dashboards/) | Dashboard JSON models |
+| [`grafana/datasources/`](grafana/datasources/) | Azure Monitor + MySQL data source provisioning |
+| [`grafana/provisioning/`](grafana/provisioning/) | Providers, folders, deployment wiring |
 | [`benchmark-integration/`](benchmark-integration/) | Joins benchmark output with collector metrics |
 
 ## MySQL 8.4 notes

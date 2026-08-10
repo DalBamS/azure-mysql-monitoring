@@ -13,7 +13,7 @@ preview and Azure platform metrics may be incomplete for them.
 | `collector.py` | Entry point: poll loop, interval, graceful shutdown |
 | `connection.py` | TLS-enforced connection factory built from environment variables |
 | `metrics.py` | Runs the queries in [`../sql/`](../sql/) and normalises results |
-| `output.py` | Append-only CSV / JSON Lines writer |
+| `output.py` | Append-only CSV / JSON Lines writer, plus the MySQL sink |
 | `requirements.txt` | `mysql-connector-python` (or `PyMySQL`) — nothing else |
 
 ## Configuration
@@ -75,3 +75,30 @@ One record per sample, for example:
 
 Downstream, [`../../benchmark-integration/`](../../benchmark-integration/) joins these rows with
 benchmark results on `run_id` and the time axis.
+
+## MySQL sink (required by Grafana)
+
+Besides the JSON Lines file, the collector persists samples to a MySQL table so
+[`../../grafana/`](../../grafana/) can graph them. Grafana cannot chart `SHOW GLOBAL STATUS`
+directly — a live `SHOW` returns an instantaneous snapshot with no time axis.
+
+```sql
+CREATE TABLE IF NOT EXISTS monitoring_metrics (
+  id      BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  ts      DATETIME(3)     NOT NULL,   -- UTC, always
+  run_id  VARCHAR(64)     NOT NULL,
+  host    VARCHAR(255)    NOT NULL,
+  tier    VARCHAR(32)     NOT NULL,   -- premium-ssd-v1 | premium-ssd-v2
+  metric  VARCHAR(128)    NOT NULL,
+  value   DOUBLE          NOT NULL,
+  PRIMARY KEY (id),
+  KEY idx_run_ts (run_id, ts),
+  KEY idx_metric_ts (metric, ts)
+) ENGINE=InnoDB;
+```
+
+- `ts` is stored in **UTC**. Grafana's MySQL data source is configured with `timezone: UTC` to
+  match; a mismatch shifts every panel and silently invalidates a v1 vs v2 comparison.
+- `run_id` is on every row so the `$run_id` dashboard variable can isolate one benchmark run.
+- Write this table to a **separate database or server** from the one under benchmark, so collection
+  writes do not perturb the measurement.

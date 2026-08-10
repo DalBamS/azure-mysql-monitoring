@@ -10,6 +10,10 @@ azure-native/bicep/main.parameters.json
 benchmark-integration/runs/
 benchmark-integration/report/
 
+# Grafana — rendered provisioning may contain expanded secrets
+grafana/provisioning/*.rendered.yaml
+grafana/provisioning/.grafana-data/
+
 # Python
 __pycache__/
 *.py[cod]

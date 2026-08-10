@@ -14,6 +14,11 @@ Log Analytics workspace provisioned in [`../bicep/`](../bicep/).
 Workbooks are stored as JSON so they are reviewable in pull requests and deployable via Bicep.
 Export from the portal, then commit the JSON — do not treat the portal as the source of truth.
 
+> **Scope note:** [`../../grafana/`](../../grafana/) is the primary operator-facing view, because it
+> is the only layer that renders Azure Monitor data and `mysql-internal/` collector data on a single
+> time axis. Workbooks remain the Azure-native, portal-side view for people already working in the
+> Azure portal.
+
 ## Conventions
 
 - Queries embedded in workbooks should mirror the ones in [`../kql/`](../kql/); keep them in sync.

@@ -16,6 +16,7 @@ flowchart LR
     COL["mysql-internal collector output<br/>(primary)"] --> J
     LAW["azure-native / Log Analytics<br/>(supplementary)"] --> J
     J --> R["v1 vs v2 comparison report"]
+    J --> G["../grafana/ dashboards<br/>($run_id variable)"]
 ```
 
 ## Expected contents
@@ -45,6 +46,9 @@ Both sides of the join must satisfy:
 - A storage-tier label (`premium-ssd-v1` / `premium-ssd-v2`) so runs are attributable.
 
 Suggested `RUN_ID` convention: `<tier>-<yyyy-mm-dd>-<seq>`, e.g. `ssdv2-2026-08-10-01`.
+
+The same `RUN_ID` is what [`../grafana/`](../grafana/) exposes as the `$run_id` dashboard variable,
+so a run analysed here can be opened in Grafana without any extra mapping.
 
 ## Configuration
 
