@@ -326,9 +326,32 @@ def check_adx(report: Report, run_id: str) -> None:
         for expected in ("MysqlMetrics1m", "MysqlEvents1m"):
             report.add(f"materialized view {expected} exists",
                        PASS if expected in views else FAIL,
-                       proves="tiered retention can keep rollups long after raw expires")
+                       proves="rollups make 90-day queries efficient without extending retention")
     except Exception as exc:  # noqa: BLE001
         report.add("materialized views exist", WARN, str(exc))
+
+    # The 90-day lifecycle applies to every representation. A materialized view is still
+    # customer telemetry; leaving an old 395-day view behind would satisfy the raw-table policy
+    # while violating the actual retention requirement.
+    for entity_type, name in (
+        ("table", "MysqlMetrics"),
+        ("table", "MysqlEvents"),
+        ("materialized-view", "MysqlMetrics1m"),
+        ("materialized-view", "MysqlEvents1m"),
+    ):
+        label = f"{name} retention is 90 days"
+        try:
+            rows = list(query(f".show {entity_type} {name} policy retention"))
+            policy = json.loads(rows[0]["Policy"]) if rows else {}
+            actual = policy.get("SoftDeletePeriod", "(unset)")
+            report.add(
+                label,
+                PASS if actual == "90.00:00:00" else FAIL,
+                f"SoftDeletePeriod={actual}",
+                proves="raw, event and rollup telemetry all expire after the requested 90 days",
+            )
+        except Exception as exc:  # noqa: BLE001
+            report.add(label, WARN, str(exc))
 
     # The real test: ingest through the streaming path and time how long the row takes to
     # become queryable. This is the number the whole "real-time budget" claim rests on.

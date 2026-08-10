@@ -27,9 +27,9 @@ flowchart LR
     COL --> |"cold path — JSONL, queued ingestion"| ADX
 
     subgraph ADX["Azure Data Explorer"]
-        RAW["MysqlMetrics / MysqlEvents<br/>raw, 30 days"]
-        MV["MysqlMetrics1m<br/>materialized view, 395 days"]
-        BR["BenchmarkRuns<br/>immutable artifacts"]
+        RAW["MysqlMetrics / MysqlEvents<br/>raw, 90 days"]
+        MV["MysqlMetrics1m<br/>materialized view, 90 days"]
+        BR["BenchmarkRuns<br/>90 days"]
         RAW --> MV
     end
 
@@ -66,17 +66,17 @@ For comparison, Azure Monitor platform metric alerts land in the 2–5 minute ra
 path is Layer 2 → ADX → Grafana, not Layer 1.** Layer 1 alerting remains as the slower, independent
 safety net that keeps working even if the collector dies.
 
-## Retention tiers
+## 90-day data lifecycle
 
-Raw data is kept briefly and rollups are kept long, so growing log volume does not grow cost
-linearly. See [`policies/`](policies/) for the actual policy commands.
+Every representation of customer telemetry is deleted after 90 days. Materialized views reduce
+query cost but do not outlive their source. See [`policies/`](policies/) for the policy commands.
 
 | Table | Hot cache | Retention | Purpose |
 |---|---|---|---|
-| `MysqlMetrics` | 7 days | 30 days | Real-time and recent analysis |
-| `MysqlMetrics1m` (materialized view) | 30 days | 395 days | Long-term trends |
-| `MysqlEvents` | 30 days | 90–365 days | `performance_schema.error_log` entries |
-| `BenchmarkRuns` | 30 days | unlimited | Immutable benchmark artifacts |
+| `MysqlMetrics` | 7 days | 90 days | Raw numeric telemetry |
+| `MysqlMetrics1m` (materialized view) | 90 days | 90 days | Efficient trend queries |
+| `MysqlEvents` | 14 days | 90 days | `performance_schema.error_log` entries |
+| `BenchmarkRuns` | 30 days | 90 days | Benchmark metadata |
 
 ## Time and correlation
 

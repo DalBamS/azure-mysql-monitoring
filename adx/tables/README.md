@@ -76,8 +76,8 @@ without a scheduled job:
 }
 ```
 
-Raw `MysqlMetrics` is then free to expire after 30 days while trends survive for a year — see
-[`../policies/`](../policies/).
+Both the raw rows and the rollup expire after 90 days. The view exists to make queries cheaper
+inside that lifecycle, not to preserve telemetry longer — see [`../policies/`](../policies/).
 
 ## Counters vs gauges
 

@@ -1,27 +1,69 @@
 # mysql-internal/collector/ — Python metrics collector
 
-A small **Python 3.11+** program that connects to Azure Database for MySQL Flexible Server
-(**MySQL 8.4**) over TLS, polls it on a fixed interval, and emits one tagged metric row per sample.
+A **Python 3.11+** collector for Azure Database for MySQL Flexible Server (**MySQL 8.4**). The
+production design runs on a monitoring VM, connects to multiple Targets over TLS, and executes a
+validated YAML Collection Plan.
 
-This is the **primary data source during benchmark runs**, because Premium SSD v2 servers are in
-preview and Azure platform metrics may be incomplete for them.
+Production monitoring is the primary mode. Benchmark Profiles reuse the same measurements at a
+shorter cadence and stamp a benchmark `RUN_ID`; Layer 2 remains authoritative for Premium SSD v2
+because its Azure platform metrics may be incomplete while the tier is in preview.
 
 ## Expected contents
 
 | File | Purpose |
 |---|---|
 | `collector.py` | Entry point: poll loop, interval, graceful shutdown, heartbeat |
+| `telemetry.py` | Versioned `measurement` / `tags` / `fields` contract and catalog validation |
+| `plan.py` | Multi-target YAML Profile validation and Collection Job compilation |
+| `monitoring.example.yaml` | Safe example Profiles and Targets; contains secret references only |
 | `connection.py` | TLS-enforced connection factory built from environment variables |
 | `metrics.py` | Runs the queries in [`../sql/`](../sql/) and normalises results |
 | `events.py` | Cursor-based incremental read of `performance_schema.error_log` |
 | `sinks/jsonl.py` | Append-only JSON Lines writer (raw archive, cold-path source) |
 | `sinks/adx.py` | ADX streaming (hot) and queued (cold) ingestion — **optional extra** |
-| `requirements.txt` | Core: `mysql-connector-python` (or `PyMySQL`) — nothing else |
+| `requirements.txt` | Core: `mysql-connector-python` and PyYAML |
 | `requirements-adx.txt` | Extra: `azure-kusto-ingest`, `azure-identity` |
 
-## Configuration
+## Collection Plan (v2)
 
-**Never hardcode credentials.** All connection info comes from environment variables:
+Copy the example outside source control, edit the Targets and validate it:
+
+```bash
+cp monitoring.example.yaml monitoring.yaml
+python plan.py monitoring.yaml
+```
+
+Expected result:
+
+```text
+VALID: 2 Targets, 4 Profiles, 14 Collection Jobs
+```
+
+The validator rejects:
+
+- literal usernames/passwords instead of environment-variable or Key Vault references;
+- unknown Collection Groups or options;
+- high-cardinality groups without explicit Profile opt-in;
+- intervals below each group's safety floor;
+- duplicate Target IDs and inheritance cycles.
+
+Profiles separate monitoring depth from code:
+
+| Profile | Intent |
+|---|---|
+| `standard` | General production health at low cardinality |
+| `extended` | File IO latency, process state, statement digest and capacity diagnosis |
+| `deep-dive` | Opt-in table/index dimensions with top-K bounds |
+| `benchmark` | Short cadence for QPS, IO and latency, compared by `RUN_ID` |
+
+`plan.py` currently validates and compiles the v2 Collection Plan. The existing `collector.py`
+entrypoint remains the single-target compatibility runtime while each Collection Group is migrated
+to the new contract; it does not silently pretend that a multi-target YAML file is already running.
+
+## Single-target compatibility configuration
+
+**Never hardcode credentials.** Compatibility mode reads connection info from environment
+variables:
 
 | Variable | Required | Description |
 |---|---|---|
@@ -70,9 +112,7 @@ python collector.py --interval 5 --sink jsonl --out "..\..\benchmark-integration
 
 ## Rules
 
-- **Python 3.11+.** The **core** collector's runtime dependencies are limited to
-  `mysql-connector-python` (or `PyMySQL`); everything else must come from the standard library.
-  **No ORM.**
+- **Python 3.11+.** Core dependencies are `mysql-connector-python` and PyYAML. **No ORM.**
 - The **ADX sink is the one sanctioned exception**, isolated in `sinks/adx.py` and
   `requirements-adx.txt` (`azure-kusto-ingest`, `azure-identity`). The core must import it lazily so
   a benchmark run works with the core requirements alone.
@@ -89,7 +129,31 @@ python collector.py --interval 5 --sink jsonl --out "..\..\benchmark-integration
 - Redact `MYSQL_PASSWORD` from any config dump or log line.
 - A sink failure must **never** kill the poll loop — buffer, retry with backoff, and keep sampling.
 
-## Output shape
+## Telemetry contract v2
+
+New Collection Groups emit a canonical Telemetry Point rather than encoding dimensions in a metric
+name:
+
+```json
+{
+  "ts": "2026-08-10T00:53:04.000000Z",
+  "contract_version": 2,
+  "run_id": "prod",
+  "target_id": "orders-db",
+  "host": "<server>",
+  "tier": "premium-ssd-v2",
+  "measurement": "mysql.file_io",
+  "series_key": "<stable-hash>",
+  "tags": {"event": "innodb_data_file", "mode": "read"},
+  "fields": {"operations_total": 1557, "wait_ms_total": 3718.8}
+}
+```
+
+The Metric Catalog validates field kind (`counter`, `gauge`, `state`), unit and allowed dimensions.
+Dashboard-critical numeric fields can be projected to narrow time-series rows. A compatibility
+adapter keeps existing `MysqlMetrics` dashboards working while ADX migrates.
+
+## Legacy output shape
 
 One JSON Lines record per sample. This is the wire format for **both** sinks, so a file replayed
 into ADX later produces rows identical to the ones ingested live:

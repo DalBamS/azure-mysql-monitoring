@@ -44,29 +44,29 @@ degrades cluster performance. Real-time is the streaming path's job.
 
 ## 3. Retention and caching
 
-Hot cache controls query speed and cost; retention controls how long data exists. Keeping raw data
-briefly and rollups for a long time is what stops cost from scaling linearly with log volume.
+Hot cache controls query speed and cost; retention controls how long data exists. Every telemetry
+representation follows the same 90-day lifecycle. Hot-cache periods may differ because they affect
+cost and performance, not deletion.
 
 ```kusto
-// Raw metrics: fast for recent work, expire quickly
+// Raw metrics: recent data stays hot; all data expires after 90 days
 .alter table MysqlMetrics policy caching   hot = 7d
-.alter table MysqlMetrics policy retention '{"SoftDeletePeriod":"30.00:00:00","Recoverability":"Enabled"}'
+.alter table MysqlMetrics policy retention '{"SoftDeletePeriod":"90.00:00:00","Recoverability":"Disabled"}'
 
-// 1-minute rollups: the long-term trend store
-.alter materialized-view MysqlMetrics1m policy caching   hot = 30d
-.alter materialized-view MysqlMetrics1m policy retention '{"SoftDeletePeriod":"395.00:00:00","Recoverability":"Enabled"}'
+// 1-minute rollups: cheaper long-range queries inside the same lifecycle
+.alter materialized-view MysqlMetrics1m policy caching   hot = 90d
+.alter materialized-view MysqlMetrics1m policy retention '{"SoftDeletePeriod":"90.00:00:00","Recoverability":"Disabled"}'
 
-// Error log events: text, lower volume, keep longer than raw metrics
-.alter table MysqlEvents policy caching   hot = 30d
-.alter table MysqlEvents policy retention '{"SoftDeletePeriod":"365.00:00:00","Recoverability":"Enabled"}'
+// Error log events: text stays hot for the incident-response window
+.alter table MysqlEvents policy caching   hot = 14d
+.alter table MysqlEvents policy retention '{"SoftDeletePeriod":"90.00:00:00","Recoverability":"Disabled"}'
 
-// Benchmark runs: immutable artifacts, never expire
-.alter table BenchmarkRuns policy retention '{"SoftDeletePeriod":"100000.00:00:00","Recoverability":"Enabled"}'
+// Benchmark metadata follows the same lifecycle
+.alter table BenchmarkRuns policy retention '{"SoftDeletePeriod":"90.00:00:00","Recoverability":"Disabled"}'
 ```
 
-Review these numbers against actual volume before production rollout. The dominant variable is
-**how many status variables the collector keeps** — MySQL 8.4 exposes 400+, and storing all of them
-instead of a curated ~80 multiplies volume roughly fivefold.
+Review hot-cache periods and collection Profiles against actual volume before production rollout.
+The 90-day deletion requirement is not a cost-tuning knob.
 
 ## 4. Collector heartbeat
 

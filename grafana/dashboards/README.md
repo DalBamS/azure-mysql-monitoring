@@ -69,7 +69,7 @@ never both. Its rate panels plot *elapsed seconds since each run started* so the
   Premium SSD v2 is in preview and its platform telemetry may have gaps. Annotate mixed panels so a
   gap is not misread as a healthy flat line.
 - **Match the table to the time range**: raw `MysqlMetrics` for live/short ranges, the
-  `MysqlMetrics1m` rollup for long ranges. Querying raw over a year is slow and expensive.
+  `MysqlMetrics1m` rollup for longer ranges inside the 90-day lifecycle.
 - Production dashboards refresh at **30s**; the streaming path was measured at 6.5s end to end on
   the test environment, so a faster refresh mostly re-queries the same rows.
 - MySQL 8.4 only: redo-log panels use `innodb_redo_log_capacity`. `innodb_log_file_size` is
@@ -93,7 +93,7 @@ MysqlMetrics
 | project Timestamp, Metric, Delta
 ```
 
-Long ranges must read the rollup view instead, so a year-long panel does not scan raw data:
+Long ranges must read the rollup view instead, so a 90-day panel does not scan every raw point:
 
 ```kusto
 MysqlMetrics1m

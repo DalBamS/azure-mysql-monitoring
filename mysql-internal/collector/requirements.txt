@@ -1,3 +1,3 @@
-# Core collector runtime dependencies — MySQL 8.4 (caching_sha2_password) over TLS.
-# Nothing else belongs here. Everything outside this file must come from the standard library.
+# Core collector runtime dependencies — MySQL 8.4 over TLS and the multi-target Collection Plan.
 mysql-connector-python>=9.0.0
+PyYAML>=6.0.2,<7

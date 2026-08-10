@@ -33,7 +33,7 @@ param tags object = {}
 param hotCachePeriod string = 'P7D'
 
 @description('Soft-delete (retention) period for the database default.')
-param softDeletePeriod string = 'P30D'
+param softDeletePeriod string = 'P90D'
 
 @description('Dev-tier SKU name. Availability is region-specific; verify with `az kusto cluster list-sku`.')
 param skuName string = 'Dev(No SLA)_Standard_D11_v2'

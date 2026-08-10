@@ -1,24 +1,25 @@
-# mysql-internal/ — Layer 2: in-server telemetry
+# mysql-internal/ — Layer 2: general-purpose in-server telemetry
 
-Telemetry collected by connecting **directly to MySQL 8.4** on Azure Database for MySQL Flexible
-Server, independent of Azure Monitor.
+Telemetry collected by a monitoring VM that connects **directly to multiple MySQL 8.4 Targets** on
+Azure Database for MySQL Flexible Server, independent of Azure Monitor.
 
 ## What lives here
 
 | Directory | Purpose |
 |---|---|
-| [`collector/`](collector/) | Python 3.11+ collector that polls the server on an interval |
-| [`sql/`](sql/) | `SHOW GLOBAL STATUS` and `performance_schema` query definitions |
+| [`collector/`](collector/) | Python 3.11+ multi-target collector, telemetry contract and YAML plan |
+| [`sql/`](sql/) | `performance_schema` / `information_schema` Collection Group queries |
 
 Collected rows land in [`../adx/`](../adx/), the unified store that
 [`../grafana/`](../grafana/) reads.
 
-## Why this layer is primary during benchmarks
+## Why production and benchmark use the same layer
 
 **Premium SSD v2 servers are in preview**, so Azure platform metrics and diagnostic logs may be
 incomplete for them. Layer 2 talks to the engine directly, so it produces a consistent dataset for
-both Premium SSD v1 and v2. When Layer 1 and Layer 2 disagree during a benchmark run, Layer 2 wins
-and the discrepancy is recorded.
+both Premium SSD v1 and v2. The benchmark Profile changes cadence and `RUN_ID`, not metric meaning.
+When Layer 1 and Layer 2 disagree during a benchmark run, Layer 2 wins and the discrepancy is
+recorded.
 
 It is also the **only** source of MySQL error-log data: Flexible Server's diagnostic settings expose
 just `MySQL Audit Logs` and `MySQL Slow Logs`, with no error-log category. And it is the **real-time
@@ -28,9 +29,9 @@ path** — seconds of latency versus the 2–5 minutes of Azure Monitor platform
 
 ```mermaid
 flowchart LR
-    ENV["Env vars<br/>MYSQL_* / ADX_* / RUN_ID"] --> COL
-    SQL["sql/ query definitions"] --> COL["collector/ (TLS-only)<br/>prod 10s / bench 1-5s"]
-    SRV["MySQL 8.4 Flexible Server"] --> COL
+    PLAN["YAML Targets + Profiles<br/>env / Key Vault references"] --> COL
+    SQL["Collection Group queries"] --> COL["collector VM (TLS-only)<br/>multi-target scheduler"]
+    SRV["Multiple MySQL 8.4 Targets"] --> COL
 
     COL ==> |"hot path — streaming (~seconds)"| ADX["../adx/ — unified store"]
     COL --> |"cold path — JSONL, queued"| ADX
@@ -49,7 +50,11 @@ flowchart LR
 
 ## Configuration
 
-Nothing is hardcoded. All connection info comes from environment variables:
+Production uses a YAML Collection Plan with references to environment variables or Azure Key Vault
+secrets; see [`collector/monitoring.example.yaml`](collector/monitoring.example.yaml). Literal
+credentials in YAML are invalid.
+
+The existing single-target compatibility runtime reads:
 
 | Variable | Description |
 |---|---|
@@ -66,8 +71,8 @@ The ADX sink authenticates with a **managed identity**, so `MYSQL_PASSWORD` is t
 
 ## Conventions
 
-- **Python 3.11+**, core dependencies limited to `mysql-connector-python` (or `PyMySQL`). The ADX
-  sink is the single sanctioned extra, isolated in `requirements-adx.txt`. **No ORM.**
+- **Python 3.11+**, with `mysql-connector-python` and PyYAML in the core runtime. Azure SDKs for the
+  ADX sink remain isolated in `requirements-adx.txt`. **No ORM.**
 - **All timestamps are UTC ISO-8601.**
 - **Every row carries `RUN_ID`**, so collector output joins with benchmark results on the time axis.
 - Emit `collector_heartbeat` every cycle — a dead collector produces a flatline that otherwise reads

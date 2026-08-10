@@ -39,17 +39,17 @@
 ```
 
 // ---------------------------------------------------------------------------
-// Retention — tiered
+// Retention — one 90-day lifecycle
 // ---------------------------------------------------------------------------
-// Raw expires quickly; the rollups carry the long history. Events are text and low-volume,
-// so they are kept longer than raw metrics: an incident post-mortem needs the message, and
-// a rollup cannot reconstruct one.
+// The product requirement applies to every representation, not just raw rows. A materialized
+// view is still customer telemetry, so keeping it after its source expires would violate the
+// same lifecycle while giving operators an incomplete picture of the older window.
 
-.alter-merge table MysqlMetrics policy retention softdelete = 30d recoverability = disabled
+.alter-merge table MysqlMetrics policy retention softdelete = 90d recoverability = disabled
 .alter-merge table MysqlEvents  policy retention softdelete = 90d recoverability = disabled
 
-.alter-merge materialized-view MysqlMetrics1m policy retention softdelete = 395d
-.alter-merge materialized-view MysqlEvents1m  policy retention softdelete = 395d
+.alter-merge materialized-view MysqlMetrics1m policy retention softdelete = 90d recoverability = disabled
+.alter-merge materialized-view MysqlEvents1m  policy retention softdelete = 90d recoverability = disabled
 
 // ---------------------------------------------------------------------------
 // Caching (hot cache) — what lives on SSD rather than in cold storage

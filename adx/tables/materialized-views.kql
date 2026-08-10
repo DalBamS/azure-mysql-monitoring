@@ -1,9 +1,8 @@
 // materialized-views.kql — 1-minute rollups.
 //
-// Long-range dashboards must not scan raw data. A materialized view keeps rollups current
-// without a scheduled job, and is what lets raw MysqlMetrics expire after 30 days while
-// trends survive for a year. This is the mechanism that stops growing log volume from
-// scaling cost linearly.
+// Long-range dashboards must not scan every raw point. A materialized view keeps rollups current
+// without a scheduled job, but it follows the same 90-day retention as its source: a rollup is
+// still customer telemetry and must not outlive the requested lifecycle.
 //
 // `backfill` is deliberately absent. ADX accepts it only on creation and rejects it on the
 // alter path, so a `.create-or-alter` carrying it succeeds once and then fails on every

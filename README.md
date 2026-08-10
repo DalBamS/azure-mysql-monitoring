@@ -1,14 +1,17 @@
 # azure-mysql-monitoring
 
-Monitoring for **Azure Database for MySQL Flexible Server (MySQL 8.4)**.
+General-purpose monitoring for services using **Azure Database for MySQL Flexible Server
+(MySQL 8.4)**.
 
-The same repository serves two purposes:
+Production and performance analysis share one telemetry contract:
 
-1. **Benchmark runs** — measuring and comparing **Premium SSD v1 vs Premium SSD v2** storage.
-2. **Ongoing production monitoring** for gaming customers.
+1. **Ongoing production monitoring** — multiple servers collected from a monitoring VM.
+2. **Performance comparison** — the same QPS, IO and latency measurements compared by `RUN_ID`,
+   including **Premium SSD v1 vs Premium SSD v2**.
 
 > Project rules live in [`.github/copilot-instructions.md`](.github/copilot-instructions.md).
 > Read them before contributing or prompting Copilot in this repo.
+> Domain language lives in [`CONTEXT.md`](CONTEXT.md); decisions live in [`docs/adr/`](docs/adr/).
 
 ## Start here
 
@@ -25,7 +28,7 @@ Where a claim is verified, the README says so and names the script that verifies
 
 ```mermaid
 flowchart TB
-    subgraph AZ["Azure Database for MySQL Flexible Server — MySQL 8.4"]
+    subgraph AZ["Azure Database for MySQL Flexible Server — MySQL 8.4 Targets"]
         SRV1["Server A — Premium SSD v1"]
         SRV2["Server B — Premium SSD v2 (preview)"]
     end
@@ -39,13 +42,13 @@ flowchart TB
     end
 
     subgraph L2["Layer 2 — mysql-internal/ (in-server telemetry)"]
-        COL["collector/ — Python 3.11+<br/>TLS-only, prod 10s / bench 1-5s"]
-        SQL["sql/ — SHOW GLOBAL STATUS<br/>+ performance_schema.error_log"]
+        COL["collector VM — Python 3.11+<br/>multi-target Collection Plan"]
+        SQL["Collection Groups<br/>status + performance_schema + information_schema"]
     end
 
     subgraph ST["adx/ — unified store"]
-        RAW["MysqlMetrics / MysqlEvents<br/>raw, 30 days"]
-        MV["MysqlMetrics1m rollup<br/>395 days"]
+        RAW["MysqlMetrics / MysqlEvents<br/>raw, 90 days"]
+        MV["MysqlMetrics1m rollup<br/>90 days"]
         RAW --> MV
     end
 
@@ -54,7 +57,7 @@ flowchart TB
         GAL["Alert rules<br/>10-30s evaluation"]
     end
 
-    ENV["Environment variables<br/>MYSQL_* / ADX_* / RUN_ID"]
+    ENV["YAML Profiles + Targets<br/>env / Key Vault secret references"]
 
     SRV1 --> DIAG
     SRV2 -. "metrics may be incomplete in preview" .-> DIAG
@@ -105,8 +108,8 @@ two ingestion paths writing to the same tables:
 | Streaming ingestion (hot) | seconds | Live production monitoring and alerting |
 | Queued ingestion (cold) | batching window | JSONL replay, backfill, benchmark archives |
 
-Retention is tiered — raw tables expire in 30 days while materialized rollups are kept for
-395 days — so growing log volume does not grow cost linearly.
+All ADX telemetry expires after **90 days**, including raw rows, events and materialized rollups.
+Rollups reduce query cost inside that window; they are not a loophole for retaining data longer.
 
 ### Layer 3 — Grafana is the final view
 
@@ -240,8 +243,8 @@ $env:RUN_ID       = "ssdv2-2026-08-10-01"
 
 ## Conventions
 
-- **Python 3.11+**, core dependencies limited to `mysql-connector-python` (or `PyMySQL`). The ADX
-  sink is the single sanctioned extra, isolated in `requirements-adx.txt`. **No ORM.**
+- **Python 3.11+**, with `mysql-connector-python` and PyYAML in the core runtime. Azure SDKs for the
+  ADX sink remain isolated in `requirements-adx.txt`. **No ORM.**
 - **All timestamps are UTC ISO-8601.** Kusto `datetime` is always UTC, so a naive or local timestamp
   silently shifts every dashboard.
 - **Every row carries `RUN_ID`** so benchmark results and collector output can be joined on the time

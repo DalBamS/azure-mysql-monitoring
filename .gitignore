@@ -19,6 +19,8 @@ benchmark-integration/report/
 mysql-internal/collector/spool/
 mysql-internal/collector/*.jsonl
 mysql-internal/collector/.cursor-state.json
+mysql-internal/collector/*.yaml
+!mysql-internal/collector/*.example.yaml
 
 # ADX / Azure IaC — rendered parameters may contain resource identifiers
 adx/bicep/*.parameters.json

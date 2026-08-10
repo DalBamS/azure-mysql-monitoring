@@ -4,9 +4,8 @@
 // latency live in adx/policies/policies.kql and are applied by
 // testing/scripts/bootstrap_adx.py, because table policies cannot be expressed in ARM.
 //
-// Keeping them out of Bicep is deliberate: the retention split (raw 30d, rollups 395d) is the
-// mechanism that stops growing log volume from growing cost linearly, and it belongs next to
-// the table definitions it applies to rather than in a template that never mentions them.
+// Keeping table policies out of Bicep is deliberate: every telemetry object is pinned to the
+// repository's 90-day lifecycle in adx/policies/policies.kql, next to the objects it governs.
 
 @description('Name of the parent ADX cluster.')
 param clusterName string
@@ -20,10 +19,10 @@ param location string = resourceGroup().location
 @description('''
 Default soft-delete (retention) period.
 
-This is only a fallback for objects with no table policy. The real retention is set per table:
-raw data expires at 30 days while materialized rollups are kept for 395.
+This is only a fallback for objects with no table policy. Every telemetry table and materialized
+view also receives an explicit 90-day policy from adx/policies/policies.kql.
 ''')
-param softDeletePeriod string = 'P30D'
+param softDeletePeriod string = 'P90D'
 
 @description('Default hot cache period. Table policies override this.')
 param hotCachePeriod string = 'P7D'

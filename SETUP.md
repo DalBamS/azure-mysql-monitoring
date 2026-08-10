@@ -261,9 +261,9 @@ The ADX cluster dominates. Options, cheapest first:
 - Enable auto-stop on non-production clusters. The production template sets `enableAutoStop: false`
   deliberately: a stopped cluster silently drops ingestion.
 
-Retention is already tuned for this: raw `MysqlMetrics` expires after 30 days while the
-`MysqlMetrics1m` rollup keeps a year, so long-range dashboards stay cheap. See
-[`adx/policies/`](adx/policies/).
+Retention is fixed at **90 days** for raw telemetry, events and materialized rollups. The
+`MysqlMetrics1m` rollup keeps long-range queries inside that window cheap; it does not preserve
+data after the 90-day lifecycle. See [`adx/policies/`](adx/policies/).
 
 For Log Analytics, the workspace is deployed with **no daily cap**. A cap looks like cost control
 and behaves like an outage: ingestion stops mid-day and the resulting gap is indistinguishable from

@@ -5,10 +5,15 @@ Read them before proposing anything.
 
 ## Project purpose
 
-Monitoring for **Azure Database for MySQL Flexible Server**. Two use cases share one codebase:
+General-purpose monitoring for services that use **Azure Database for MySQL Flexible Server**.
 
-1. **Benchmark runs** — comparing **Premium SSD v1 vs Premium SSD v2** storage.
-2. **Ongoing production monitoring** for gaming customers.
+1. **Ongoing production monitoring** is the primary mode.
+2. **Benchmark runs** compare **Premium SSD v1 vs Premium SSD v2** by reusing the same telemetry
+   contract and dashboards with different `RUN_ID` / storage-tier dimensions.
+
+The supported production topology is multiple Azure MySQL Targets feeding one collector VM, with
+ADX as the 90-day telemetry store and Grafana as the operator view. Domain terms are defined in
+[`CONTEXT.md`](../CONTEXT.md); architecture decisions are recorded in [`docs/adr/`](../docs/adr/).
 
 ## Target platform
 
@@ -50,12 +55,21 @@ Azure-platform telemetry:
 
 ### Layer 2 — `mysql-internal/`
 
-A **Python collector** that polls the server directly over TLS:
+A **Python collector** running on a VM polls multiple servers directly over TLS:
 
 - `SHOW GLOBAL STATUS` — cumulative counters, sampled each interval.
 - `performance_schema.error_log` — a **ring buffer**, read incrementally with a `LOGGED` cursor.
   This is the only way to get MySQL error-log data on Flexible Server.
 - `performance_schema` summary tables — snapshot and diff.
+- `information_schema` capacity and InnoDB measurements at a slower cadence.
+
+Collection is driven by a validated YAML **Collection Plan**. It selects repository-owned
+Collection Groups through Profiles; the main loop must not hardcode each group. The canonical
+output is a Telegraf-inspired **Telemetry Point** with a measurement, tags and fields. Its Metric
+Catalog owns field kinds, units, dimensions, cardinality and derived semantics.
+
+High-cardinality telemetry (digest, schema, table, index, user or process dimensions) is opt-in and
+bounded by top-K, filters and interval floors.
 
 **Layer 2 is the primary data source during benchmark runs.** Premium SSD v2 servers are in
 **preview**, so Azure platform metrics and diagnostic logs may be incomplete or missing for them.
@@ -76,8 +90,8 @@ Grafana; RU cost on write-heavy telemetry; cannot hold logs).
 - Queued ingestion batches up to **5 minutes** by default and **cannot** carry real-time monitoring.
   Never try to fix real-time by shrinking the batching policy alone; enable streaming ingestion.
 - Streaming ingestion is capped at roughly **4 MB per request** — bulk loads use the queued path.
-- **Retention is tiered**: raw tables expire quickly, materialized-view rollups are kept long. This
-  is what keeps growing log volume affordable.
+- **All ADX telemetry is retained for exactly 90 days**: raw points, events, dimensional data,
+  materialized views and rollups. No policy may retain telemetry longer.
 - Kusto `datetime` is **always UTC**, which matches this repo's timestamp rule exactly.
 - `RunId` is on every row, including production rows (use a sentinel like `prod`).
 - **Event Hub is deliberately not used.** Introduce it only if fan-in grows to hundreds of
@@ -107,7 +121,7 @@ Azure Data Explorer data source is not available on the deprecated Essential tie
 
 - **Never hardcode credentials**, hostnames, or connection strings. Not in code, not in
   Bicep parameter defaults, not in READMEs, not in examples, not in tests.
-- All connection info comes from **environment variables**:
+- Single-target compatibility mode reads connection info from **environment variables**:
   - `MYSQL_HOST`
   - `MYSQL_USER`
   - `MYSQL_PASSWORD`
@@ -123,12 +137,14 @@ Azure Data Explorer data source is not available on the deprecated Essential tie
 - **Document these environment variables in every README** that describes runnable code.
 - Never log the value of `MYSQL_PASSWORD`. Redact it if a config dump is printed.
 - Do not commit `.env` files, `.pem` keys, or Azure credentials.
+- Multi-target YAML contains **references only**: an environment-variable name or an Azure Key
+  Vault URI/secret name. Literal usernames or passwords in YAML are invalid.
 
 ## Python conventions
 
 - **Python 3.11+**.
-- Core collector runtime dependencies: **`mysql-connector-python`** (or **`PyMySQL`**) — nothing
-  else. A benchmark run must work with the core requirements alone.
+- Core collector runtime dependencies: **`mysql-connector-python`** (or **`PyMySQL`**) plus
+  **PyYAML** for the multi-target Collection Plan. Do not add an ORM or telemetry framework.
 - **One sanctioned exception:** the ADX sink may use `azure-kusto-ingest` and `azure-identity`.
   Keep it isolated in `sinks/adx.py` with its own `requirements-adx.txt`, imported lazily so the
   core never hard-depends on it. Do not add further dependencies without changing this file.
@@ -151,8 +167,9 @@ Azure Data Explorer data source is not available on the deprecated Essential tie
   identical to those ingested live. Output is append-only so a run can be replayed and re-analysed.
 - Store raw cumulative counters and derive rates at query time; never pre-compute away a counter
   reset, which is real signal.
-- **Curate the metric allow-list.** MySQL 8.4 exposes 400+ status variables; keeping a curated ~80
-  cuts ingestion volume roughly fivefold. Filter at collection, not downstream.
+- **Curate collection by measurement and Profile.** Low-cardinality production signals are enabled
+  by default. High-cardinality measurement families require explicit opt-in and bounds. Filter at
+  collection, not downstream.
 
 ## Testing — `testing/`
 
