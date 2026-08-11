@@ -1,0 +1,191 @@
+{
+  "uid": "mysqlmon-query-performance",
+  "title": "MySQL 8.4 — Query Performance",
+  "description": "Answers which normalized statement digests consume time, exhibit tail latency, create disk temporary tables, miss indexes or return errors. Digest hashes are retained; literal SQL text is never exported.",
+  "tags": ["mysql", "queries", "production"],
+  "timezone": "utc",
+  "editable": false,
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "run_id",
+        "label": "Run ID",
+        "type": "query",
+        "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+        "query": {
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "table",
+          "query": "MysqlTelemetry | where RunId != 'verify-probe' | summarize LastSeen=max(Timestamp) by RunId | order by LastSeen desc | project RunId"
+        },
+        "refresh": 1,
+        "includeAll": false,
+        "multi": false
+      },
+      {
+        "name": "target_id",
+        "label": "Target",
+        "type": "query",
+        "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+        "query": {
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "table",
+          "query": "MysqlTelemetry | where RunId == '$run_id' and TargetId != 'verify-probe' | summarize by TargetId | order by TargetId asc"
+        },
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Worst current p95",
+      "description": "Maximum latest p95 across bounded statement digests for each Target.",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": true } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "table",
+          "query": "let samples = materialize(MysqlMetricSeries\n| where $__timeFilter(Timestamp)\n| where RunId == '$run_id' and TargetId in ($target_id)\n| where Measurement == 'mysql.statement_digest' and Field == 'latency_p95_ms');\nlet latest_by_target = samples | summarize LatestTimestamp=max(Timestamp) by TargetId;\nsamples\n| join kind=inner latest_by_target on TargetId\n| where Timestamp == LatestTimestamp\n| summarize WorstP95Ms=max(Value) by TargetId"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Worst current p99",
+      "description": "Maximum latest p99 across bounded statement digests for each Target.",
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": true } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "table",
+          "query": "let samples = materialize(MysqlMetricSeries\n| where $__timeFilter(Timestamp)\n| where RunId == '$run_id' and TargetId in ($target_id)\n| where Measurement == 'mysql.statement_digest' and Field == 'latency_p99_ms');\nlet latest_by_target = samples | summarize LatestTimestamp=max(Timestamp) by TargetId;\nsamples\n| join kind=inner latest_by_target on TargetId\n| where Timestamp == LatestTimestamp\n| summarize WorstP99Ms=max(Value) by TargetId"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Statement error rate",
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": true } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "table",
+          "query": "MetricSeriesRate('mysql.statement_digest', 'errors_total', '$run_id', $__timeFrom, $__timeTo)\n| where TargetId in ($target_id)\n| summarize ErrorsPerSecond=sum(Rate) by Timestamp, TargetId\n| summarize arg_max(Timestamp, ErrorsPerSecond) by TargetId\n| project TargetId, ErrorsPerSecond"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "No-index execution rate",
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": true } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "table",
+          "query": "MetricSeriesRate('mysql.statement_digest', 'no_index_used_total', '$run_id', $__timeFrom, $__timeTo)\n| where TargetId in ($target_id)\n| summarize NoIndexPerSecond=sum(Rate) by Timestamp, TargetId\n| summarize arg_max(Timestamp, NoIndexPerSecond) by TargetId\n| project TargetId, NoIndexPerSecond"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "table",
+      "title": "Top statement digests",
+      "description": "Latest cumulative workload and tail latency by normalized digest. SQL text is deliberately absent.",
+      "gridPos": { "h": 11, "w": 24, "x": 0, "y": 5 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "table",
+          "query": "let samples = materialize(MysqlMetricSeries\n| where $__timeFilter(Timestamp)\n| where RunId == '$run_id' and TargetId in ($target_id)\n| where Measurement == 'mysql.statement_digest');\nlet latest_by_target = samples | summarize LatestTimestamp=max(Timestamp) by TargetId;\nsamples\n| join kind=inner latest_by_target on TargetId\n| where Timestamp == LatestTimestamp\n| extend Schema=tostring(Tags.schema), Digest=tostring(Tags.digest)\n| summarize Executions=maxif(Value, Field == 'executions_total'), P95Ms=maxif(Value, Field == 'latency_p95_ms'), P99Ms=maxif(Value, Field == 'latency_p99_ms'), Errors=maxif(Value, Field == 'errors_total'), RowsExamined=maxif(Value, Field == 'rows_examined_total') by TargetId, Schema, Digest\n| order by P99Ms desc\n| take 100"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Query tail latency",
+      "description": "Worst p95 and p99 among the top-K digest set at each collection timestamp.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": { "defaults": { "unit": "ms", "custom": { "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "time_series",
+          "query": "MysqlMetricSeries\n| where $__timeFilter(Timestamp)\n| where RunId == '$run_id' and TargetId in ($target_id)\n| where Measurement == 'mysql.statement_digest' and Field in ('latency_p95_ms', 'latency_p99_ms')\n| summarize LatencyMs=max(Value) by Timestamp, TargetId, Field\n| extend Series=strcat(TargetId, ' / ', Field)\n| project Timestamp, Series, LatencyMs\n| order by Timestamp asc"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Temporary tables and no-index executions",
+      "description": "Rates derived independently per digest, then summed. Disk temporary tables are storage-sensitive; no-index executions indicate access-path regressions.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "fillOpacity": 15, "showPoints": "never" } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "time_series",
+          "query": "union\n  (MetricSeriesRate('mysql.statement_digest', 'tmp_disk_tables_total', '$run_id', $__timeFrom, $__timeTo)),\n  (MetricSeriesRate('mysql.statement_digest', 'no_index_used_total', '$run_id', $__timeFrom, $__timeTo))\n| where TargetId in ($target_id)\n| summarize Rate=sum(Rate) by Timestamp, TargetId, Field\n| extend Series=strcat(TargetId, ' / ', Field)\n| project Timestamp, Series, Rate\n| order by Timestamp asc"
+        }
+      ]
+    }
+  ]
+}

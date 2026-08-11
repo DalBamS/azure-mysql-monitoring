@@ -20,7 +20,7 @@
           "querySource": "raw",
           "rawMode": true,
           "resultFormat": "table",
-          "query": "MysqlMetrics | summarize LastSeen = max(Timestamp) by RunId | order by LastSeen desc | project RunId"
+          "query": "MysqlTelemetry | where RunId != 'verify-probe' | summarize LastSeen = max(Timestamp) by RunId | order by LastSeen desc | project RunId"
         },
         "refresh": 1,
         "includeAll": true,
@@ -64,7 +64,7 @@
           "querySource": "raw",
           "rawMode": true,
           "resultFormat": "table",
-          "query": "CollectorHealth(6h)\n| project Host, RunId, LastBeat, SecondsSinceLastBeat, Status\n| order by SecondsSinceLastBeat desc"
+          "query": "CollectorHealth(90d)\n| where RunId in ($run_id) and TargetId != 'verify-probe'\n| project TargetId, Host, RunId, LastBeat, SecondsSinceLastBeat, Status\n| order by SecondsSinceLastBeat desc"
         }
       ]
     },
@@ -76,7 +76,7 @@
       "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 },
       "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": true } },
       "targets": [
         {
           "refId": "A",
@@ -85,7 +85,7 @@
           "querySource": "raw",
           "rawMode": true,
           "resultFormat": "table",
-          "query": "MysqlMetrics\n| where $__timeFilter(Timestamp)\n| where RunId in ($run_id)\n| summarize Metrics = dcount(Metric) by Source\n| order by Source asc"
+          "query": "MysqlMetricSeries\n| where $__timeFilter(Timestamp)\n| where RunId in ($run_id) and TargetId != 'verify-probe'\n| summarize Fields=dcount(Field) by TargetId, Measurement\n| order by TargetId asc, Measurement asc"
         }
       ]
     },
@@ -96,7 +96,7 @@
       "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 },
       "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": true } },
       "targets": [
         {
           "refId": "A",
@@ -105,7 +105,7 @@
           "querySource": "raw",
           "rawMode": true,
           "resultFormat": "table",
-          "query": "MysqlMetrics\n| where $__timeFilter(Timestamp)\n| where RunId in ($run_id)\n| summarize Rows = count()"
+          "query": "MysqlTelemetry\n| where $__timeFilter(Timestamp)\n| where RunId in ($run_id) and TargetId != 'verify-probe'\n| summarize Rows=count() by TargetId"
         }
       ]
     },
@@ -125,7 +125,7 @@
           "querySource": "raw",
           "rawMode": true,
           "resultFormat": "time_series",
-          "query": "MysqlMetrics\n| where $__timeFilter(Timestamp)\n| where RunId in ($run_id)\n| summarize Rows = count() by bin(Timestamp, 1m), Source\n| order by Timestamp asc"
+          "query": "MysqlTelemetry\n| where $__timeFilter(Timestamp)\n| where RunId in ($run_id) and TargetId != 'verify-probe'\n| summarize Rows=count() by bin(Timestamp, 1m), TargetId, Measurement\n| extend Series=strcat(TargetId, ' / ', Measurement)\n| project Timestamp, Series, Rows\n| order by Timestamp asc"
         }
       ]
     },
@@ -145,7 +145,7 @@
           "querySource": "raw",
           "rawMode": true,
           "resultFormat": "time_series",
-          "query": "MysqlMetrics\n| where $__timeFilter(Timestamp)\n| where Source == 'collector' and Metric == 'collector_cycle_duration_ms'\n| where RunId in ($run_id)\n| project Timestamp, Host, Value\n| order by Timestamp asc"
+          "query": "MysqlMetricSeries\n| where $__timeFilter(Timestamp)\n| where Measurement == 'collector.health' and Field == 'cycle_duration_ms'\n| where RunId in ($run_id)\n| project Timestamp, TargetId, Value\n| order by Timestamp asc"
         }
       ]
     },
@@ -153,7 +153,7 @@
       "id": 6,
       "type": "table",
       "title": "Ingestion lag — newest sample per run",
-      "description": "End-to-end freshness: collector poll to queryable row. The streaming path was measured at 6.5s on the test environment; the queued path is minutes by design.",
+      "description": "End-to-end freshness: collector poll to queryable row. The streaming path was measured at 8–10s on the test environment; the queued path is minutes by design.",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
       "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
       "fieldConfig": { "defaults": {}, "overrides": [] },
@@ -165,7 +165,7 @@
           "querySource": "raw",
           "rawMode": true,
           "resultFormat": "table",
-          "query": "MysqlMetrics\n| summarize Newest = max(Timestamp), Rows = count() by RunId, Host, Tier\n| extend AgeSeconds = datetime_diff('second', now(), Newest)\n| order by Newest desc"
+          "query": "MysqlTelemetry\n| where RunId != 'verify-probe' and TargetId != 'verify-probe'\n| summarize Newest = max(Timestamp), Rows = count(), Measurements=dcount(Measurement) by RunId, TargetId, Host, Tier\n| extend AgeSeconds = datetime_diff('second', now(), Newest)\n| order by Newest desc"
         }
       ]
     }

@@ -1,7 +1,7 @@
 {
   "uid": "mysqlmon-benchmark-ssd",
   "title": "Benchmark — Premium SSD v1 vs v2",
-  "description": "Side-by-side comparison of two benchmark runs. Selecting the runs rather than filtering by time is deliberate: the two runs happen at different wall-clock times, so a shared time axis would show one run or the other, never both. This dashboard is fed exclusively by the Layer 2 collector, because Premium SSD v2 is in preview and Azure platform metrics may be incomplete for it.",
+  "description": "Side-by-side v2 telemetry comparison of two benchmark runs. QPS, file IOPS, file wait latency and statement p95/p99 come from the same collector contract, because Azure platform metrics may be incomplete for Premium SSD v2 preview.",
   "tags": ["mysql", "benchmark"],
   "timezone": "utc",
   "editable": false,
@@ -20,7 +20,7 @@
           "querySource": "raw",
           "rawMode": true,
           "resultFormat": "table",
-          "query": "MysqlMetrics | summarize LastSeen = max(Timestamp) by RunId | order by LastSeen desc | project RunId"
+          "query": "MysqlTelemetry | where RunId != 'verify-probe' | summarize LastSeen = max(Timestamp) by RunId | order by LastSeen desc | project RunId"
         },
         "refresh": 1,
         "includeAll": false,
@@ -36,9 +36,41 @@
           "querySource": "raw",
           "rawMode": true,
           "resultFormat": "table",
-          "query": "MysqlMetrics | summarize LastSeen = max(Timestamp) by RunId | order by LastSeen desc | project RunId"
+          "query": "MysqlTelemetry | where RunId != 'verify-probe' | summarize LastSeen = max(Timestamp) by RunId | order by LastSeen desc | project RunId"
         },
         "refresh": 1,
+        "includeAll": false,
+        "multi": false
+      },
+      {
+        "name": "baseline_target",
+        "label": "Baseline Target",
+        "type": "query",
+        "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+        "query": {
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "table",
+          "query": "MysqlTelemetry | where RunId == '$baseline' and TargetId != 'verify-probe' | summarize by TargetId | order by TargetId asc"
+        },
+        "refresh": 2,
+        "includeAll": false,
+        "multi": false
+      },
+      {
+        "name": "candidate_target",
+        "label": "Candidate Target",
+        "type": "query",
+        "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+        "query": {
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "table",
+          "query": "MysqlTelemetry | where RunId == '$candidate' and TargetId != 'verify-probe' | summarize by TargetId | order by TargetId asc"
+        },
+        "refresh": 2,
         "includeAll": false,
         "multi": false
       }
@@ -61,7 +93,7 @@
           "querySource": "raw",
           "rawMode": true,
           "resultFormat": "table",
-          "query": "let metrics = dynamic(['Innodb_data_reads', 'Innodb_data_writes', 'Innodb_data_fsyncs', 'Innodb_os_log_fsyncs', 'Innodb_row_lock_time_avg', 'Innodb_log_waits', 'Threads_running', 'Slow_queries']);\nMysqlMetrics\n| where RunId in ('$baseline', '$candidate')\n| where Metric in (metrics)\n| summarize Avg = round(avg(Value), 2), P95 = round(percentile(Value, 95), 2), Max = round(max(Value), 2), Samples = count() by Metric, RunId, Tier\n| order by Metric asc, RunId asc"
+          "query": "BenchmarkSummary('$baseline', '$candidate', ago(90d), now())\n| where (RunId == '$baseline' and TargetId == '$baseline_target') or (RunId == '$candidate' and TargetId == '$candidate_target')\n| order by Metric asc, RunId asc"
         }
       ]
     },
@@ -96,14 +128,14 @@
           "querySource": "raw",
           "rawMode": true,
           "resultFormat": "table",
-          "query": "let metrics = dynamic(['Innodb_data_reads', 'Innodb_data_writes', 'Innodb_data_fsyncs', 'Innodb_os_log_fsyncs', 'Innodb_row_lock_time_avg', 'Innodb_log_waits', 'Threads_running', 'Slow_queries']);\nMysqlMetrics\n| where RunId in ('$baseline', '$candidate')\n| where Metric in (metrics)\n| summarize P95 = percentile(Value, 95) by Metric, RunId\n| summarize Baseline = anyif(P95, RunId == '$baseline'), Candidate = anyif(P95, RunId == '$candidate') by Metric\n| where isnotnull(Baseline) and isnotnull(Candidate) and Baseline > 0\n| extend PercentChange = round(100.0 * (Candidate - Baseline) / Baseline, 1)\n| order by abs(PercentChange) desc"
+          "query": "BenchmarkSummary('$baseline', '$candidate', ago(90d), now())\n| where (RunId == '$baseline' and TargetId == '$baseline_target') or (RunId == '$candidate' and TargetId == '$candidate_target')\n| summarize Baseline=avgif(P95, RunId == '$baseline'), Candidate=avgif(P95, RunId == '$candidate') by Metric\n| where isnotnull(Baseline) and isnotnull(Candidate) and Baseline > 0\n| extend PercentChange=round(100.0 * (Candidate - Baseline) / Baseline, 1)\n| order by abs(PercentChange) desc"
         }
       ]
     },
     {
       "id": 3,
       "type": "timeseries",
-      "title": "Data read rate — elapsed seconds into run",
+      "title": "Read IOPS — elapsed seconds into run",
       "description": "The x-axis is seconds since each run started, not wall-clock time, so two runs recorded hours apart overlay cleanly.",
       "gridPos": { "h": 9, "w": 12, "x": 0, "y": 20 },
       "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
@@ -116,17 +148,17 @@
           "querySource": "raw",
           "rawMode": true,
           "resultFormat": "table",
-          "query": "let runStarts = MysqlMetrics | where RunId in ('$baseline', '$candidate') | summarize RunStart = min(Timestamp) by RunId;\nMysqlMetrics\n| where RunId in ('$baseline', '$candidate')\n| where Metric == 'Innodb_data_reads'\n| order by RunId asc, Timestamp asc\n| extend PrevValue = prev(Value), PrevTs = prev(Timestamp), PrevRun = prev(RunId)\n| where RunId == PrevRun\n| extend Seconds = datetime_diff('second', Timestamp, PrevTs)\n| where Seconds > 0 and Value >= PrevValue\n| extend Rate = (Value - PrevValue) / Seconds\n| join kind=inner runStarts on RunId\n| extend ElapsedSeconds = datetime_diff('second', Timestamp, RunStart)\n| project ElapsedSeconds, RunId, Rate\n| order by ElapsedSeconds asc"
+          "query": "let rates = union\n  (MetricSeriesRate('mysql.file_io', 'operations_total', '$baseline', ago(90d), now())),\n  (MetricSeriesRate('mysql.file_io', 'operations_total', '$candidate', ago(90d), now()))\n| where ((RunId == '$baseline' and TargetId == '$baseline_target') or (RunId == '$candidate' and TargetId == '$candidate_target')) and tostring(Tags.mode) == 'read'\n| summarize IOPS=sum(Rate) by Timestamp, RunId, TargetId;\nlet starts = rates | summarize RunStart=min(Timestamp) by RunId, TargetId;\nrates\n| join kind=inner starts on RunId, TargetId\n| extend ElapsedSeconds=datetime_diff('second', Timestamp, RunStart), Series=strcat(RunId, ' / ', TargetId)\n| project ElapsedSeconds, Series, IOPS\n| order by ElapsedSeconds asc"
         }
       ]
     },
     {
       "id": 4,
       "type": "timeseries",
-      "title": "Write rate — elapsed seconds into run",
+      "title": "File IO latency — elapsed seconds into run",
       "gridPos": { "h": 9, "w": 12, "x": 12, "y": 20 },
       "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
-      "fieldConfig": { "defaults": { "unit": "iops", "custom": { "fillOpacity": 0, "showPoints": "never" } }, "overrides": [] },
+      "fieldConfig": { "defaults": { "unit": "ms", "custom": { "fillOpacity": 0, "showPoints": "never" } }, "overrides": [] },
       "targets": [
         {
           "refId": "A",
@@ -135,7 +167,7 @@
           "querySource": "raw",
           "rawMode": true,
           "resultFormat": "table",
-          "query": "let runStarts = MysqlMetrics | where RunId in ('$baseline', '$candidate') | summarize RunStart = min(Timestamp) by RunId;\nMysqlMetrics\n| where RunId in ('$baseline', '$candidate')\n| where Metric == 'Innodb_data_writes'\n| order by RunId asc, Timestamp asc\n| extend PrevValue = prev(Value), PrevTs = prev(Timestamp), PrevRun = prev(RunId)\n| where RunId == PrevRun\n| extend Seconds = datetime_diff('second', Timestamp, PrevTs)\n| where Seconds > 0 and Value >= PrevValue\n| extend Rate = (Value - PrevValue) / Seconds\n| join kind=inner runStarts on RunId\n| extend ElapsedSeconds = datetime_diff('second', Timestamp, RunStart)\n| project ElapsedSeconds, RunId, Rate\n| order by ElapsedSeconds asc"
+          "query": "let operations = union\n  (MetricSeriesRate('mysql.file_io', 'operations_total', '$baseline', ago(90d), now())),\n  (MetricSeriesRate('mysql.file_io', 'operations_total', '$candidate', ago(90d), now()))\n| where (RunId == '$baseline' and TargetId == '$baseline_target') or (RunId == '$candidate' and TargetId == '$candidate_target')\n| project Timestamp, RunId, TargetId, SeriesKey, Mode=tostring(Tags.mode), Operations=Rate;\nlet waits = union\n  (MetricSeriesRate('mysql.file_io', 'wait_ms_total', '$baseline', ago(90d), now())),\n  (MetricSeriesRate('mysql.file_io', 'wait_ms_total', '$candidate', ago(90d), now()))\n| where (RunId == '$baseline' and TargetId == '$baseline_target') or (RunId == '$candidate' and TargetId == '$candidate_target')\n| project Timestamp, RunId, TargetId, SeriesKey, WaitMs=Rate;\nlet latency = operations\n| where Mode in ('read', 'write')\n| join kind=inner waits on Timestamp, RunId, TargetId, SeriesKey\n| summarize Operations=sum(Operations), WaitMs=sum(WaitMs) by Timestamp, RunId, TargetId, Mode\n| where Operations > 0\n| extend LatencyMs=WaitMs / Operations;\nlet starts = latency | summarize RunStart=min(Timestamp) by RunId, TargetId;\nlatency\n| join kind=inner starts on RunId, TargetId\n| extend ElapsedSeconds=datetime_diff('second', Timestamp, RunStart)\n| project ElapsedSeconds, Series=strcat(RunId, ' / ', TargetId, ' / ', Mode), LatencyMs\n| order by ElapsedSeconds asc"
         }
       ]
     },
@@ -155,7 +187,7 @@
           "querySource": "raw",
           "rawMode": true,
           "resultFormat": "table",
-          "query": "MysqlMetrics\n| summarize Started = min(Timestamp), Ended = max(Timestamp), Samples = count(), Metrics = dcount(Metric) by RunId, Tier, Host\n| extend DurationMinutes = round(datetime_diff('second', Ended, Started) / 60.0, 1)\n| order by Started desc"
+          "query": "MysqlTelemetry\n| where (RunId == '$baseline' and TargetId == '$baseline_target') or (RunId == '$candidate' and TargetId == '$candidate_target')\n| summarize Started=min(Timestamp), Ended=max(Timestamp), Points=count(), Measurements=dcount(Measurement) by RunId, TargetId, Tier, Host\n| extend DurationMinutes=round(datetime_diff('second', Ended, Started) / 60.0, 1)\n| order by Started desc"
         }
       ]
     }

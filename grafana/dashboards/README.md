@@ -7,14 +7,12 @@ for MySQL Flexible Server (MySQL 8.4).
 
 | File | Status | Purpose |
 |---|---|---|
-| `production-overview.json` | **built** | Ongoing health view for gaming customer workloads |
-| `benchmark-ssd-v1-vs-v2.json` | **built** | Premium SSD v1 vs v2 comparison, driven by `$baseline` / `$candidate` |
-| `collector-health.json` | **built** | Heartbeat, sample arrival rate, cycle duration, ingestion lag |
+| `production-overview.json` | **built** | QPS, connections, buffer pool and row activity |
+| `storage-io.json` | **built** | File IOPS, throughput, operation latency and redo pressure |
+| `query-performance.json` | **built** | Statement p95/p99, errors, temp tables and no-index usage |
+| `benchmark-ssd-v1-vs-v2.json` | **built** | QPS/IO/latency comparison by `$baseline` / `$candidate` |
+| `collector-health.json` | **built** | Per-Target heartbeat, sample arrival, cycle time and ingestion lag |
 | `check-dashboard-queries.py` | **built** | Runs every panel's KQL against the real cluster |
-| `storage-io.json` | planned | IOPS, throughput, read/write latency, redo-log pressure |
-| `connections-and-threads.json` | planned | Folded into `production-overview.json` for now |
-| `query-performance.json` | planned | `performance_schema` statement digests and slow queries |
-| `error-log.json` | planned | Folded into `production-overview.json` for now |
 
 Deploy them with [`../provisioning/deploy.ps1`](../provisioning/deploy.ps1).
 
@@ -34,7 +32,7 @@ otherwise reject, then runs each query and reports its row count. A panel return
 reported separately from one that failed, because an empty error-log panel is correct on a healthy
 server while an empty throughput panel is not.
 
-Last verified against the live test environment: **24 panels returning data, 1 valid but empty
+Last verified against the live test environment: **43 queries returning data, 1 valid but empty
 (error log), 0 failed.**
 
 ## Rules
@@ -51,15 +49,17 @@ Last verified against the live test environment: **24 panels returning data, 1 v
 | Variable | Dashboard | Purpose |
 |---|---|---|
 | `$run_id` | overview, collector health | Selects one run; matches the `RUN_ID` env var tagged onto every metric row |
-| `$host` | overview | Which Flexible Server instance to display |
+| `$target_id` | overview, storage, query performance | Which Collection Plan Target to display |
 | `$baseline` / `$candidate` | benchmark | The two runs being compared |
+| `$baseline_target` / `$candidate_target` | benchmark | The explicit Target from each run; prevents multi-target aggregation |
 
 Because both the benchmark output and the collector output carry the same `RUN_ID`, selecting
 `$run_id` lines up load-generator results and engine-internal metrics on one time axis.
 
-The benchmark dashboard selects **two runs** rather than filtering by time, because the v1 and v2
-runs happen at different wall-clock times — a shared time axis would show one run or the other,
-never both. Its rate panels plot *elapsed seconds since each run started* so the two overlay.
+The benchmark dashboard selects **one Target from each of two runs** rather than filtering by time,
+because the v1 and v2 runs happen at different wall-clock times and a run may contain several
+Targets. Its rate panels plot *elapsed seconds since each selected Target started* so the two overlay
+without merging sibling servers.
 
 ## Panel conventions
 
@@ -68,9 +68,9 @@ never both. Its rate panels plot *elapsed seconds since each run started* so the
 - **ADX panels are authoritative during benchmarks**; Azure Monitor panels are supplementary, since
   Premium SSD v2 is in preview and its platform telemetry may have gaps. Annotate mixed panels so a
   gap is not misread as a healthy flat line.
-- **Match the table to the time range**: raw `MysqlMetrics` for live/short ranges, the
-  `MysqlMetrics1m` rollup for longer ranges inside the 90-day lifecycle.
-- Production dashboards refresh at **30s**; the streaming path was measured at 6.5s end to end on
+- Numeric panels read `MysqlMetricSeries`; packed `MysqlTelemetry` is for inventory, replay and
+  non-numeric state. Both expire after 90 days.
+- Production dashboards refresh at **30s**; the streaming path was measured at 8–10s end to end on
   the test environment, so a faster refresh mostly re-queries the same rows.
 - MySQL 8.4 only: redo-log panels use `innodb_redo_log_capacity`. `innodb_log_file_size` is
   deprecated but still *readable* — it reports a stale value that governs nothing once
@@ -80,26 +80,27 @@ never both. Its rate panels plot *elapsed seconds since each run started* so the
 
 ## Query shape
 
-Panels backed by the ADX data source query the collector's ingested rows with KQL. Short/live
-ranges read the raw table:
+Counter panels use the catalog semantics already stored with each series. The shared
+`MetricSeriesRate` function isolates each Target/series and drops reset boundaries:
 
 ```kusto
-MysqlMetrics
-| where $__timeFilter(Timestamp)
-| where RunId == '$run_id' and Metric in ($metric)
-| order by Timestamp asc
-| extend Delta = Value - prev(Value)     // counters are cumulative
-| where Delta >= 0
-| project Timestamp, Metric, Delta
+MetricSeriesRate(
+    'mysql.global_status', 'Queries', '$run_id', $__timeFrom, $__timeTo)
+| where TargetId in ($target_id)
+| project Timestamp, TargetId, QPS=Rate
 ```
 
-Long ranges must read the rollup view instead, so a 90-day panel does not scan every raw point:
+File latency joins the rate of cumulative wait milliseconds to the rate of operations with the same
+`SeriesKey`, then divides wait by operations. Do not average per-file latencies without weighting by
+operation count.
 
 ```kusto
-MysqlMetrics1m
-| where $__timeFilter(Timestamp)
-| where Metric == 'Innodb_data_reads'
-| project Timestamp, Avg, Max
+let operations =
+    MetricSeriesRate('mysql.file_io', 'operations_total', '$run_id', $__timeFrom, $__timeTo);
+let waits =
+    MetricSeriesRate('mysql.file_io', 'wait_ms_total', '$run_id', $__timeFrom, $__timeTo);
+operations
+| join kind=inner waits on Timestamp, TargetId, SeriesKey
 ```
 
 Error-log panels read the events table — this data has no Azure Monitor equivalent:
@@ -118,5 +119,5 @@ hardcoded:
 | Variable | Description |
 |---|---|
 | `ADX_CLUSTER_URI` | `https://<cluster>.<region>.kusto.windows.net` |
-| `ADX_DATABASE` | Database holding `MysqlMetrics` / `MysqlEvents` |
+| `ADX_DATABASE` | Database holding `MysqlTelemetry`, `MysqlMetricSeries` and `MysqlEvents` |
 | `RUN_ID` | Benchmark run identifier, surfaced as `$run_id` |

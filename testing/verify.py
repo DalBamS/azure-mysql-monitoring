@@ -386,8 +386,9 @@ def check_adx(report: Report, run_id: str) -> None:
         sink = AdxSink(cfg, streaming=True)
         env = Envelope(run_id=run_id, host=cfg.host, tier=cfg.tier)
         probe_metric = f"verify_probe_{int(time.time())}"
-        probe_target = f"verify-probe-{int(time.time())}"
+        probe_target = "verify-probe"
         observed_at = utc_now()
+        probe_since = observed_at.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         sent_at = time.monotonic()
         sink.write_metrics([env.metric(observed_at, "collector", probe_metric, 42.0)])
 
@@ -401,8 +402,8 @@ def check_adx(report: Report, run_id: str) -> None:
                 TelemetryPoint(
                     observed_at=observed_at,
                     context=TelemetryContext(
-                        run_id=run_id,
-                        target_id=probe_target,
+                        run_id="verify-probe",
+                        target_id="verify-probe",
                         host=cfg.host,
                         tier=cfg.tier,
                         collector_id="verify",
@@ -425,8 +426,10 @@ def check_adx(report: Report, run_id: str) -> None:
                 query(
                     "print "
                     f"Legacy=toscalar(MysqlMetrics | where Metric == '{probe_metric}' | count), "
-                    f"Packed=toscalar(MysqlTelemetry | where TargetId == '{probe_target}' | count), "
-                    f"Series=toscalar(MysqlMetricSeries | where TargetId == '{probe_target}' | count)"
+                    f"Packed=toscalar(MysqlTelemetry | where TargetId == '{probe_target}' "
+                    f"and Timestamp >= datetime({probe_since}) | count), "
+                    f"Series=toscalar(MysqlMetricSeries | where TargetId == '{probe_target}' "
+                    f"and Timestamp >= datetime({probe_since}) | count)"
                 )
             )
             if (

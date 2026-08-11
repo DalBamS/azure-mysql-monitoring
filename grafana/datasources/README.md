@@ -30,7 +30,7 @@ assigned in [`../../adx/bicep/`](../../adx/bicep/).
 
 > Verified on the live test environment: the Grafana managed identity appears in the ADX database
 > principal list as `principalType: App` with role `Viewer`, and a query through the Grafana proxy
-> returned real rows from `MysqlMetrics`.
+> returned real rows from `MysqlMetricSeries`.
 
 ## 2. Azure Monitor (Layer 1)
 
@@ -71,7 +71,7 @@ from the ADX data source, fed by the collector reading `performance_schema.error
 | Variable | Description |
 |---|---|
 | `ADX_CLUSTER_URI` | `https://<cluster>.<region>.kusto.windows.net` |
-| `ADX_DATABASE` | Database holding `MysqlMetrics` / `MysqlEvents` |
+| `ADX_DATABASE` | Database holding `MysqlTelemetry`, `MysqlMetricSeries` and `MysqlEvents` |
 | `AZURE_SUBSCRIPTION_ID` | Subscription for the Azure Monitor data source |
 | `LOG_ANALYTICS_WORKSPACE_ID` | Workspace receiving Slow/Audit logs |
 | `RUN_ID` | Benchmark run identifier, surfaced to dashboards as `$run_id` |

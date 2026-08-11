@@ -52,8 +52,8 @@ error log reaches Grafana exclusively through ADX.
 | Grafana alert evaluation (30s) | ~15s |
 | **End-to-end detection** | **~25–45s** |
 
-To hold that budget: dashboard auto-refresh at **10s**, alert rule evaluation at **10–30s**, and
-panels that query raw `MysqlMetrics` rather than the rollup views for short time ranges.
+To hold that budget: dashboard auto-refresh at **30s**, alert rule evaluation at **10–30s**, and
+panels that query `MysqlMetricSeries` directly for short time ranges.
 
 ## Alerting tiers
 
@@ -72,8 +72,7 @@ which reads as "healthy" unless absence of data is itself alertable.
 
 - **`$run_id` is a template variable** on benchmark dashboards, so a v1 run and a v2 run can be
   compared without editing panels.
-- Long time ranges query the **materialized rollup views**, not raw tables; short/live ranges query
-  raw. See [`../adx/tables/`](../adx/tables/).
+- Live numeric panels query `MysqlMetricSeries`; inventory and replay use packed `MysqlTelemetry`.
 - Kusto `datetime` is always UTC, matching this repo's UTC ISO-8601 rule — never pin a dashboard to
   a local timezone.
 - Counters from `SHOW GLOBAL STATUS` are cumulative; apply a delta/rate transform rather than
@@ -94,7 +93,7 @@ No credentials anywhere — both data sources authenticate with **managed identi
 | Variable | Description |
 |---|---|
 | `ADX_CLUSTER_URI` | `https://<cluster>.<region>.kusto.windows.net` |
-| `ADX_DATABASE` | Database holding `MysqlMetrics` / `MysqlEvents` |
+| `ADX_DATABASE` | Database holding `MysqlTelemetry`, `MysqlMetricSeries` and `MysqlEvents` |
 | `AZURE_SUBSCRIPTION_ID` | Subscription for the Azure Monitor data source |
 | `LOG_ANALYTICS_WORKSPACE_ID` | Workspace receiving Slow/Audit logs |
 | `RUN_ID` | Benchmark run identifier, surfaced as the `$run_id` variable |

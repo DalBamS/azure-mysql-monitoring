@@ -69,7 +69,7 @@ mandatory `collector_heartbeat` rule described in [`../README.md`](../README.md)
 | Variable | Description |
 |---|---|
 | `ADX_CLUSTER_URI` | `https://<cluster>.<region>.kusto.windows.net` |
-| `ADX_DATABASE` | Database holding `MysqlMetrics` / `MysqlEvents` |
+| `ADX_DATABASE` | Database holding `MysqlTelemetry`, `MysqlMetricSeries` and `MysqlEvents` |
 | `AZURE_SUBSCRIPTION_ID` | Subscription for the Azure Monitor data source |
 | `LOG_ANALYTICS_WORKSPACE_ID` | Workspace receiving Slow/Audit logs |
 | `RUN_ID` | Benchmark run identifier, surfaced as the `$run_id` dashboard variable |

@@ -1,7 +1,7 @@
 {
   "uid": "mysqlmon-prod-overview",
   "title": "MySQL 8.4 — Production Overview",
-  "description": "Layer 2 collector view of an Azure Database for MySQL Flexible Server. Every panel reads MysqlMetrics in ADX; nothing here depends on Azure platform metrics, so it works identically on Premium SSD v2 preview servers.",
+  "description": "Operator overview for multi-target MySQL 8.4 telemetry. Panels read catalog-approved v2 series from ADX, so the view is identical for Premium SSD v1 and Premium SSD v2.",
   "tags": ["mysql", "production"],
   "timezone": "utc",
   "editable": false,
@@ -20,15 +20,15 @@
           "querySource": "raw",
           "rawMode": true,
           "resultFormat": "table",
-          "query": "MysqlMetrics | summarize LastSeen = max(Timestamp) by RunId | order by LastSeen desc | project RunId"
+          "query": "MysqlTelemetry | where RunId != 'verify-probe' | summarize LastSeen = max(Timestamp) by RunId | order by LastSeen desc | project RunId"
         },
         "refresh": 1,
         "includeAll": false,
         "multi": false
       },
       {
-        "name": "host",
-        "label": "Host",
+        "name": "target_id",
+        "label": "Target",
         "type": "query",
         "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
         "query": {
@@ -36,7 +36,7 @@
           "querySource": "raw",
           "rawMode": true,
           "resultFormat": "table",
-          "query": "MysqlMetrics | where RunId == '$run_id' | summarize by Host"
+          "query": "MysqlTelemetry | where RunId == '$run_id' and TargetId != 'verify-probe' | summarize by TargetId | order by TargetId asc"
         },
         "refresh": 2,
         "includeAll": true,
@@ -66,7 +66,7 @@
         },
         "overrides": []
       },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "background" },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": true }, "colorMode": "background" },
       "targets": [
         {
           "refId": "A",
@@ -75,7 +75,7 @@
           "querySource": "raw",
           "rawMode": true,
           "resultFormat": "table",
-          "query": "MysqlMetrics\n| where Timestamp > ago(30m)\n| where Metric == 'collector_heartbeat' and RunId == '$run_id'\n| summarize LastBeat = max(Timestamp) by Host\n| extend SecondsSinceLastBeat = datetime_diff('second', now(), LastBeat)\n| project Host, SecondsSinceLastBeat"
+          "query": "CollectorHealth(90d)\n| where RunId == '$run_id' and TargetId in ($target_id)\n| project TargetId, SecondsSinceLastBeat"
         }
       ]
     },
@@ -86,7 +86,7 @@
       "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
       "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": true } },
       "targets": [
         {
           "refId": "A",
@@ -95,7 +95,7 @@
           "querySource": "raw",
           "rawMode": true,
           "resultFormat": "table",
-          "query": "MysqlMetrics\n| where $__timeFilter(Timestamp)\n| where Metric == 'Threads_connected' and RunId == '$run_id'\n| summarize arg_max(Timestamp, Value) by Host\n| project Host, Connected = Value"
+          "query": "MysqlMetricSeries\n| where $__timeFilter(Timestamp)\n| where RunId == '$run_id' and TargetId in ($target_id)\n| where Measurement == 'mysql.global_status' and Field == 'Threads_connected'\n| summarize arg_max(Timestamp, Value) by TargetId\n| project TargetId, Connected = Value"
         }
       ]
     },
@@ -122,7 +122,7 @@
         },
         "overrides": []
       },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "background" },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": true }, "colorMode": "background" },
       "targets": [
         {
           "refId": "A",
@@ -131,7 +131,7 @@
           "querySource": "raw",
           "rawMode": true,
           "resultFormat": "table",
-          "query": "MysqlMetrics\n| where $__timeFilter(Timestamp)\n| where RunId == '$run_id'\n| where Metric in ('Innodb_buffer_pool_reads', 'Innodb_buffer_pool_read_requests')\n| summarize arg_max(Timestamp, Value) by Host, Metric\n| summarize Reads = sumif(Value, Metric == 'Innodb_buffer_pool_reads'), Requests = sumif(Value, Metric == 'Innodb_buffer_pool_read_requests') by Host\n| where Requests > 0\n| project Host, HitRatio = 1.0 - (Reads / Requests)"
+          "query": "let reads = MetricSeriesRate('mysql.global_status', 'Innodb_buffer_pool_reads', '$run_id', $__timeFrom, $__timeTo) | project Timestamp, TargetId, DiskReads=Rate;\nlet requests = MetricSeriesRate('mysql.global_status', 'Innodb_buffer_pool_read_requests', '$run_id', $__timeFrom, $__timeTo) | project Timestamp, TargetId, Requests=Rate;\nreads\n| join kind=inner requests on Timestamp, TargetId\n| where TargetId in ($target_id) and Requests > 0\n| extend HitRatio = 1.0 - (DiskReads / Requests)\n| summarize arg_max(Timestamp, HitRatio) by TargetId\n| project TargetId, HitRatio"
         }
       ]
     },
@@ -142,7 +142,7 @@
       "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
       "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": true } },
       "targets": [
         {
           "refId": "A",
@@ -151,7 +151,7 @@
           "querySource": "raw",
           "rawMode": true,
           "resultFormat": "table",
-          "query": "MysqlMetrics\n| where $__timeFilter(Timestamp)\n| where Metric == 'Slow_queries' and RunId == '$run_id'\n| summarize arg_max(Timestamp, Value) by Host\n| project Host, SlowQueries = Value"
+          "query": "MysqlMetricSeries\n| where $__timeFilter(Timestamp)\n| where RunId == '$run_id' and TargetId in ($target_id)\n| where Measurement == 'mysql.global_status' and Field == 'Slow_queries'\n| summarize arg_max(Timestamp, Value) by TargetId\n| project TargetId, SlowQueries = Value"
         }
       ]
     },
@@ -171,7 +171,7 @@
           "querySource": "raw",
           "rawMode": true,
           "resultFormat": "time_series",
-          "query": "MysqlMetrics\n| where $__timeFilter(Timestamp)\n| where Metric == 'Queries' and RunId == '$run_id'\n| order by Host asc, Timestamp asc\n| extend PrevValue = prev(Value), PrevTs = prev(Timestamp), PrevHost = prev(Host)\n| where Host == PrevHost\n| extend Seconds = datetime_diff('second', Timestamp, PrevTs)\n| where Seconds > 0 and Value >= PrevValue\n| project Timestamp, Host, QPS = (Value - PrevValue) / Seconds\n| order by Timestamp asc"
+          "query": "MetricSeriesRate('mysql.global_status', 'Queries', '$run_id', $__timeFrom, $__timeTo)\n| where TargetId in ($target_id)\n| project Timestamp, TargetId, QPS=Rate\n| order by Timestamp asc"
         }
       ]
     },
@@ -191,7 +191,7 @@
           "querySource": "raw",
           "rawMode": true,
           "resultFormat": "time_series",
-          "query": "MysqlMetrics\n| where $__timeFilter(Timestamp)\n| where RunId == '$run_id'\n| where Metric in ('Threads_connected', 'Threads_running', 'Threads_cached', 'Max_used_connections')\n| project Timestamp, Metric, Value\n| order by Timestamp asc"
+          "query": "MysqlMetricSeries\n| where $__timeFilter(Timestamp)\n| where RunId == '$run_id' and TargetId in ($target_id)\n| where Measurement == 'mysql.global_status' and Field in ('Threads_connected', 'Threads_running', 'Threads_cached', 'Max_used_connections')\n| project Timestamp, Series=strcat(TargetId, ' / ', Field), Value\n| order by Timestamp asc"
         }
       ]
     },
@@ -210,7 +210,7 @@
           "querySource": "raw",
           "rawMode": true,
           "resultFormat": "time_series",
-          "query": "MysqlMetrics\n| where $__timeFilter(Timestamp)\n| where RunId == '$run_id'\n| where Metric in ('Innodb_rows_read', 'Innodb_rows_inserted', 'Innodb_rows_updated', 'Innodb_rows_deleted')\n| order by Metric asc, Timestamp asc\n| extend PrevValue = prev(Value), PrevTs = prev(Timestamp), PrevMetric = prev(Metric)\n| where Metric == PrevMetric\n| extend Seconds = datetime_diff('second', Timestamp, PrevTs)\n| where Seconds > 0 and Value >= PrevValue\n| project Timestamp, Metric, Rate = (Value - PrevValue) / Seconds\n| order by Timestamp asc"
+          "query": "union\n  (MetricSeriesRate('mysql.global_status', 'Innodb_rows_read', '$run_id', $__timeFrom, $__timeTo)),\n  (MetricSeriesRate('mysql.global_status', 'Innodb_rows_inserted', '$run_id', $__timeFrom, $__timeTo)),\n  (MetricSeriesRate('mysql.global_status', 'Innodb_rows_updated', '$run_id', $__timeFrom, $__timeTo)),\n  (MetricSeriesRate('mysql.global_status', 'Innodb_rows_deleted', '$run_id', $__timeFrom, $__timeTo))\n| where TargetId in ($target_id)\n| project Timestamp, Series=strcat(TargetId, ' / ', Field), Rate\n| order by Timestamp asc"
         }
       ]
     },
@@ -230,7 +230,7 @@
           "querySource": "raw",
           "rawMode": true,
           "resultFormat": "time_series",
-          "query": "MysqlMetrics\n| where $__timeFilter(Timestamp)\n| where RunId == '$run_id'\n| where Metric in ('Aborted_connects', 'Aborted_clients')\n| order by Metric asc, Timestamp asc\n| extend PrevValue = prev(Value), PrevTs = prev(Timestamp), PrevMetric = prev(Metric)\n| where Metric == PrevMetric\n| extend Seconds = datetime_diff('second', Timestamp, PrevTs)\n| where Seconds > 0 and Value >= PrevValue\n| project Timestamp, Metric, Rate = (Value - PrevValue) / Seconds\n| order by Timestamp asc"
+          "query": "union\n  (MetricSeriesRate('mysql.global_status', 'Aborted_connects', '$run_id', $__timeFrom, $__timeTo)),\n  (MetricSeriesRate('mysql.global_status', 'Aborted_clients', '$run_id', $__timeFrom, $__timeTo))\n| where TargetId in ($target_id)\n| project Timestamp, Series=strcat(TargetId, ' / ', Field), Rate\n| order by Timestamp asc"
         }
       ]
     },
@@ -250,7 +250,7 @@
           "querySource": "raw",
           "rawMode": true,
           "resultFormat": "table",
-          "query": "MysqlEvents\n| where $__timeFilter(Timestamp)\n| where RunId == '$run_id'\n| project Timestamp, Level, ErrorCode, Subsystem, Message\n| order by Timestamp desc\n| take 200"
+          "query": "let selectedTargets = MysqlTelemetry\n| where RunId == '$run_id' and TargetId in ($target_id)\n| summarize by TargetId, Host;\nMysqlEvents\n| where $__timeFilter(Timestamp)\n| where RunId == '$run_id'\n| join kind=inner selectedTargets on Host\n| project Timestamp, TargetId, Level, ErrorCode, Subsystem, Message\n| order by Timestamp desc\n| take 200"
         }
       ]
     }

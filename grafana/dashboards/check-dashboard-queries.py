@@ -35,15 +35,19 @@ MACROS = {
 }
 
 
-def substitute(query: str, run_id: str) -> str:
+def substitute(query: str, run_id: str, target_id: str) -> str:
     for macro, replacement in MACROS.items():
         query = query.replace(macro, replacement)
     # Multi-value variables are interpolated by Grafana as a quoted, comma-separated list.
     query = query.replace("($run_id)", f"('{run_id}')")
+    query = query.replace("($target_id)", f"('{target_id}')")
+    query = query.replace("$baseline_target", target_id)
+    query = query.replace("$candidate_target", target_id)
     for var in ("$run_id", "$baseline", "$candidate"):
         query = query.replace(var, run_id)
-    # $host is a multi-select that may be unused in a given panel.
-    query = re.sub(r"\$host", "", query)
+    query = query.replace("$target_id", target_id)
+    # Legacy variables may be unused in a given panel.
+    query = re.sub(r"\$(host|metric)", "", query)
     return query
 
 
@@ -71,11 +75,21 @@ def main() -> int:
 
     run_id = os.environ.get("RUN_ID", "")
     if not run_id:
-        result = client.execute(database, "MysqlMetrics | summarize LastSeen = max(Timestamp) by RunId "
+        result = client.execute(database, "MysqlTelemetry | where RunId != 'verify-probe' "
+                                           "| summarize LastSeen = max(Timestamp) by RunId "
                                           "| order by LastSeen desc | take 1 | project RunId")
         rows = list(result.primary_results[0])
         run_id = rows[0]["RunId"] if rows else "none"
-    print(f"Substituting run id: {run_id}\n")
+    result = client.execute(
+        database,
+        f"MysqlTelemetry | where RunId == '{run_id}' "
+        "| where TargetId != 'verify-probe' "
+        "| summarize LastSeen=max(Timestamp), Measurements=dcount(Measurement), Points=count() by TargetId "
+        "| order by Measurements desc, Points desc, LastSeen desc | take 1 | project TargetId",
+    )
+    target_rows = list(result.primary_results[0])
+    target_id = target_rows[0]["TargetId"] if target_rows else "none"
+    print(f"Substituting run id: {run_id}; Target: {target_id}\n")
 
     passed = failed = empty = 0
     for path in sorted(DASHBOARD_DIR.glob("*.json")):
@@ -83,7 +97,7 @@ def main() -> int:
         print(f"=== {path.name} — {dashboard.get('title')} ===")
 
         for title, ref, raw in iter_queries(dashboard):
-            query = substitute(raw, run_id).replace("${ADX_DATABASE}", database)
+            query = substitute(raw, run_id, target_id).replace("${ADX_DATABASE}", database)
             label = f"  [{ref}] {title}"
             try:
                 response = client.execute(database, query)

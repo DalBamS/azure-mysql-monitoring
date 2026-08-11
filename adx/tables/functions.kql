@@ -29,6 +29,26 @@
     | project Timestamp, Host, Tier, Metric, Rate = Delta / Seconds
 }
 
+.create-or-alter function with (docstring="Per-second rate and delta for one v2 catalog counter, reset-safe and Target-aware", folder="mysql/v2")
+    MetricSeriesRate(measurementName: string, fieldName: string, runId: string, startTime: datetime, endTime: datetime)
+{
+    MysqlMetricSeries
+    | where Timestamp between (startTime .. endTime)
+    | where Measurement == measurementName and Field == fieldName and RunId == runId
+    | order by TargetId asc, SeriesKey asc, Timestamp asc
+    | serialize
+    | extend PrevValue = prev(Value), PrevTimestamp = prev(Timestamp),
+             PrevTargetId = prev(TargetId), PrevSeriesKey = prev(SeriesKey)
+    | where TargetId == PrevTargetId and SeriesKey == PrevSeriesKey
+    | extend Seconds = datetime_diff('millisecond', Timestamp, PrevTimestamp) / 1000.0
+    | where Seconds > 0
+    | extend Delta = Value - PrevValue
+    | where Delta >= 0
+    | extend Rate = Delta / Seconds
+    | project Timestamp, RunId, TargetId, Host, Tier, Measurement, Field,
+              SeriesKey, Tags, Delta, Seconds, Rate
+}
+
 // ---------------------------------------------------------------------------
 // CollectorHealth — is the collector alive?
 // ---------------------------------------------------------------------------
@@ -68,4 +88,55 @@
     | where Metric == metricName and RunId in (baselineRun, candidateRun)
     | summarize Avg = avg(Value), P95 = percentile(Value, 95), Max = max(Value), Samples = count()
       by RunId, Tier, Metric
+}
+
+.create-or-alter function with (docstring="QPS, file IOPS, file latency and query tail-latency summary for two v2 benchmark runs", folder="benchmark/v2")
+    BenchmarkSummary(baselineRun: string, candidateRun: string, startTime: datetime, endTime: datetime)
+{
+    let Qps =
+        union
+            (MetricSeriesRate("mysql.global_status", "Queries", baselineRun, startTime, endTime)),
+            (MetricSeriesRate("mysql.global_status", "Queries", candidateRun, startTime, endTime))
+        | project Timestamp, RunId, TargetId, Host, Tier, Metric="QPS", Value=Rate;
+    let FileOperations =
+        union
+            (MetricSeriesRate("mysql.file_io", "operations_total", baselineRun, startTime, endTime)),
+            (MetricSeriesRate("mysql.file_io", "operations_total", candidateRun, startTime, endTime))
+        | extend Mode=tostring(Tags.mode);
+    let FileWait =
+        union
+            (MetricSeriesRate("mysql.file_io", "wait_ms_total", baselineRun, startTime, endTime)),
+            (MetricSeriesRate("mysql.file_io", "wait_ms_total", candidateRun, startTime, endTime))
+        | project Timestamp, RunId, TargetId, SeriesKey, WaitMsPerSecond=Rate;
+    let FileIops =
+        FileOperations
+        | where Mode in ("read", "write")
+        | summarize Value=sum(Rate) by Timestamp, RunId, TargetId, Host, Tier, Mode
+        | extend Metric=iff(Mode == "read", "Read IOPS", "Write IOPS")
+        | project Timestamp, RunId, TargetId, Host, Tier, Metric, Value;
+    let FileLatency =
+        FileOperations
+        | where Mode in ("read", "write")
+        | project Timestamp, RunId, TargetId, Host, Tier, SeriesKey, Mode, OperationsPerSecond=Rate
+        | join kind=inner FileWait on Timestamp, RunId, TargetId, SeriesKey
+        | summarize OperationsPerSecond=sum(OperationsPerSecond),
+                    WaitMsPerSecond=sum(WaitMsPerSecond)
+          by Timestamp, RunId, TargetId, Host, Tier, Mode
+        | where OperationsPerSecond > 0
+        | extend Value=WaitMsPerSecond / OperationsPerSecond
+        | extend Metric=iff(Mode == "read", "Read latency ms", "Write latency ms")
+        | project Timestamp, RunId, TargetId, Host, Tier, Metric, Value;
+    let QueryTail =
+        MysqlMetricSeries
+        | where Timestamp between (startTime .. endTime)
+        | where RunId in (baselineRun, candidateRun)
+        | where Measurement == "mysql.statement_digest"
+        | where Field in ("latency_p95_ms", "latency_p99_ms")
+        | summarize Value=max(Value) by Timestamp, RunId, TargetId, Host, Tier, Field
+        | extend Metric=iff(Field == "latency_p95_ms", "Query p95 ms", "Query p99 ms")
+        | project Timestamp, RunId, TargetId, Host, Tier, Metric, Value;
+    union Qps, FileIops, FileLatency, QueryTail
+    | summarize Avg=round(avg(Value), 3), P95=round(percentile(Value, 95), 3),
+                Max=round(max(Value), 3), Samples=count()
+      by Metric, RunId, TargetId, Host, Tier
 }
