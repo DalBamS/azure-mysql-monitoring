@@ -79,6 +79,9 @@ which reads as "healthy" unless absence of data is itself alertable.
   plotting raw values.
 - MySQL 8.4 only: redo-log panels use `innodb_redo_log_capacity`, not `innodb_log_file_size`.
 - Dashboards are **provisioned from this repo**, never left as UI-only edits.
+- Benchmark decisions follow the reproducible
+  [performance evaluation and reporting method](../benchmark-integration/PERFORMANCE_EVALUATION.md);
+  screenshots alone are not accepted as the result.
 
 ## Relationship to Azure Workbooks
 

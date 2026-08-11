@@ -90,7 +90,7 @@
       by RunId, Tier, Metric
 }
 
-.create-or-alter function with (docstring="QPS, file IOPS, file latency and query tail-latency summary for two v2 benchmark runs", folder="benchmark/v2")
+.create-or-alter function with (docstring="QPS, file IO, query latency/error and redo-wait summary for two v2 benchmark runs", folder="benchmark/v2")
     BenchmarkSummary(baselineRun: string, candidateRun: string, startTime: datetime, endTime: datetime)
 {
     let Qps =
@@ -114,6 +114,16 @@
         | summarize Value=sum(Rate) by Timestamp, RunId, TargetId, Host, Tier, Mode
         | extend Metric=iff(Mode == "read", "Read IOPS", "Write IOPS")
         | project Timestamp, RunId, TargetId, Host, Tier, Metric, Value;
+    let FileThroughput =
+        union
+            (MetricSeriesRate("mysql.file_io", "bytes_total", baselineRun, startTime, endTime)),
+            (MetricSeriesRate("mysql.file_io", "bytes_total", candidateRun, startTime, endTime))
+        | extend Mode=tostring(Tags.mode)
+        | where Mode in ("read", "write")
+        | summarize BytesPerSecond=sum(Rate) by Timestamp, RunId, TargetId, Host, Tier, Mode
+        | extend Value=BytesPerSecond / 1024.0 / 1024.0
+        | extend Metric=iff(Mode == "read", "Read throughput MiB/s", "Write throughput MiB/s")
+        | project Timestamp, RunId, TargetId, Host, Tier, Metric, Value;
     let FileLatency =
         FileOperations
         | where Mode in ("read", "write")
@@ -135,7 +145,20 @@
         | summarize Value=max(Value) by Timestamp, RunId, TargetId, Host, Tier, Field
         | extend Metric=iff(Field == "latency_p95_ms", "Query p95 ms", "Query p99 ms")
         | project Timestamp, RunId, TargetId, Host, Tier, Metric, Value;
-    union Qps, FileIops, FileLatency, QueryTail
+    let QueryErrors =
+        union
+            (MetricSeriesRate("mysql.statement_digest", "errors_total", baselineRun, startTime, endTime)),
+            (MetricSeriesRate("mysql.statement_digest", "errors_total", candidateRun, startTime, endTime))
+        | summarize Value=sum(Rate) by Timestamp, RunId, TargetId, Host, Tier
+        | extend Metric="Query errors/s"
+        | project Timestamp, RunId, TargetId, Host, Tier, Metric, Value;
+    let RedoLogWaits =
+        union
+            (MetricSeriesRate("mysql.global_status", "Innodb_log_waits", baselineRun, startTime, endTime)),
+            (MetricSeriesRate("mysql.global_status", "Innodb_log_waits", candidateRun, startTime, endTime))
+        | extend Metric="Redo log waits/s", Value=Rate
+        | project Timestamp, RunId, TargetId, Host, Tier, Metric, Value;
+    union Qps, FileIops, FileThroughput, FileLatency, QueryTail, QueryErrors, RedoLogWaits
     | summarize Avg=round(avg(Value), 3), P95=round(percentile(Value, 95), 3),
                 Max=round(max(Value), 3), Samples=count()
       by Metric, RunId, TargetId, Host, Tier

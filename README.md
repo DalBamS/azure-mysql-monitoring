@@ -18,6 +18,7 @@ Production and performance analysis share one telemetry contract:
 | If you want to… | Go to |
 |---|---|
 | **Set up monitoring for a server you already have** | **[`SETUP.md`](SETUP.md)** |
+| Understand the deployed components, security boundaries and failure paths | [`docs/architecture.md`](docs/architecture.md) |
 | See the whole stack work end to end first, on throwaway resources | [`testing/`](testing/) |
 | Understand what each layer can and cannot tell you | [the comparison table in `SETUP.md`](SETUP.md#what-each-layer-can-and-cannot-tell-you) |
 
@@ -47,7 +48,7 @@ flowchart TB
     end
 
     subgraph ST["adx/ — unified store"]
-        RAW["MysqlMetrics / MysqlEvents<br/>raw, 90 days"]
+        RAW["MysqlTelemetry / MysqlMetricSeries / MysqlEvents<br/>raw, 90 days"]
         MV["MysqlMetrics1m rollup<br/>90 days"]
         RAW --> MV
     end
@@ -141,6 +142,8 @@ flatlined chart otherwise reads as healthy.
 | Path | Purpose |
 |---|---|
 | [`SETUP.md`](SETUP.md) | **Production setup guide — start here** |
+| [`docs/architecture.md`](docs/architecture.md) | Detailed system, security, data-flow and recovery architecture |
+| [`docs/architecture.excalidraw`](docs/architecture.excalidraw) | Editable architecture diagram source |
 | [`azure-native/`](azure-native/) | Azure Monitor–based monitoring (Layer 1) |
 | [`azure-native/bicep/`](azure-native/bicep/) | Bicep IaC for workspace, diagnostic settings, alerts |
 | [`azure-native/workbooks/`](azure-native/workbooks/) | Azure Workbook dashboard definitions |

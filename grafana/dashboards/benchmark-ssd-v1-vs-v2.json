@@ -5,6 +5,14 @@
   "tags": ["mysql", "benchmark"],
   "timezone": "utc",
   "editable": false,
+  "links": [
+    {
+      "title": "Performance evaluation and reporting guide",
+      "type": "link",
+      "url": "https://github.com/DalBamS/azure-mysql-monitoring/blob/main/benchmark-integration/PERFORMANCE_EVALUATION.md",
+      "targetBlank": true
+    }
+  ],
   "schemaVersion": 39,
   "refresh": "",
   "time": { "from": "now-7d", "to": "now" },
@@ -101,14 +109,14 @@
       "id": 2,
       "type": "table",
       "title": "Delta — candidate vs baseline",
-      "description": "Positive PercentChange means the candidate run recorded a higher value. Whether higher is better depends on the metric: more IOPS is good, more log waits is not.",
+      "description": "PercentChange is the raw candidate change. DirectionalScore normalizes direction so positive is always better; Interpretation applies the ±5% material-change threshold.",
       "gridPos": { "h": 10, "w": 24, "x": 0, "y": 10 },
       "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
       "fieldConfig": {
         "defaults": { "custom": { "align": "right" } },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "PercentChange" },
+            "matcher": { "id": "byName", "options": "DirectionalScore" },
             "properties": [
               { "id": "unit", "value": "percent" },
               { "id": "custom.cellOptions", "value": { "type": "color-text" } },
@@ -128,7 +136,7 @@
           "querySource": "raw",
           "rawMode": true,
           "resultFormat": "table",
-          "query": "BenchmarkSummary('$baseline', '$candidate', ago(90d), now())\n| where (RunId == '$baseline' and TargetId == '$baseline_target') or (RunId == '$candidate' and TargetId == '$candidate_target')\n| summarize Baseline=avgif(P95, RunId == '$baseline'), Candidate=avgif(P95, RunId == '$candidate') by Metric\n| where isnotnull(Baseline) and isnotnull(Candidate) and Baseline > 0\n| extend PercentChange=round(100.0 * (Candidate - Baseline) / Baseline, 1)\n| order by abs(PercentChange) desc"
+          "query": "BenchmarkSummary('$baseline', '$candidate', ago(90d), now())\n| where (RunId == '$baseline' and TargetId == '$baseline_target') or (RunId == '$candidate' and TargetId == '$candidate_target')\n| summarize Baseline=avgif(P95, RunId == '$baseline'), Candidate=avgif(P95, RunId == '$candidate') by Metric\n| where isnotnull(Baseline) and isnotnull(Candidate) and Baseline > 0\n| extend PercentChange=round(100.0 * (Candidate - Baseline) / Baseline, 1)\n| extend BetterDirection=iff(Metric in ('QPS', 'Read IOPS', 'Write IOPS', 'Read throughput MiB/s', 'Write throughput MiB/s'), 'Higher', 'Lower')\n| extend DirectionalScore=iff(BetterDirection == 'Higher', PercentChange, -PercentChange)\n| extend Interpretation=case(DirectionalScore >= 5.0, 'IMPROVEMENT', DirectionalScore <= -5.0, 'REGRESSION', 'NO MATERIAL CHANGE')\n| order by DirectionalScore asc"
         }
       ]
     },

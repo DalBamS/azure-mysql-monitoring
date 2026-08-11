@@ -24,9 +24,8 @@ flowchart LR
 | Path | Purpose |
 |---|---|
 | `runs/` | Per-run raw JSONL, one file per `RUN_ID` (git-ignored) |
-| `upload.py` | Queued-ingests a finished run's JSONL into ADX |
-| `join.py` | Aligns benchmark rows and collector rows on `run_id` + timestamp |
-| `compare.py` | Produces the Premium SSD v1 vs v2 comparison |
+| [`performance_report.py`](performance_report.py) | Generates a direction-aware Markdown comparison from ADX |
+| [`PERFORMANCE_EVALUATION.md`](PERFORMANCE_EVALUATION.md) | Grafana analysis and reporting method |
 | `report/` | Generated summaries and charts |
 
 ## Why the collector is the primary source
@@ -79,19 +78,20 @@ Nothing is hardcoded. All connection info comes from environment variables:
 export RUN_ID="ssdv2-2026-08-10-01"
 export MYSQL_TIER="premium-ssd-v2"
 
-# 1. start the collector (separate shell) with the same RUN_ID, then run the benchmark
-# 2. upload the run, then join and compare
-python upload.py  --run-id "$RUN_ID"
-python join.py    --run-id "$RUN_ID"
-python compare.py --baseline ssdv1-2026-08-10-01 --candidate "$RUN_ID"
+# Start the collector with the same RUN_ID, run the workload, then compare:
+python performance_report.py \
+  --baseline-run ssdv1-2026-08-10-01 --baseline-target orders-v1 \
+  --candidate-run "$RUN_ID" --candidate-target orders-v2
 ```
 
 ## Conventions
 
-- **Python 3.11+**, core dependencies limited to `mysql-connector-python` (or `PyMySQL`). Only
-  `upload.py` may use the ADX extras from `requirements-adx.txt`. **No ORM.**
+- **Python 3.11+**, core dependencies limited to `mysql-connector-python` (or `PyMySQL`). ADX
+  reporting uses the sanctioned extras from `requirements-adx.txt`. **No ORM.**
 - All timestamps stay **UTC ISO-8601** end to end; no timezone conversion during the join.
 - Raw run data under `runs/` is not committed — it can be large and may contain customer-shaped
   workload details.
-- Benchmark rows in ADX are retained indefinitely; they are immutable artifacts, unlike production
-  telemetry which expires on the schedule in [`../adx/policies/`](../adx/policies/).
+- All ADX telemetry, including benchmark rows, expires after exactly **90 days**. Preserve approved
+  conclusions in a Markdown report; keep raw JSONL outside Git for replay.
+
+See [`PERFORMANCE_EVALUATION.md`](PERFORMANCE_EVALUATION.md) for the complete workflow.
