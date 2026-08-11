@@ -51,6 +51,7 @@ class FieldSpec:
     unit: str
     value_type: type[int] | type[float] | type[bool] | type[str] = float
     series: bool = True
+    required: bool = True
 
     def validate(self, measurement: str, name: str, value: FieldValue) -> None:
         # bool is a subclass of int, so accepting it as an integer silently turns state into a
@@ -185,7 +186,10 @@ class MetricCatalog:
     def validate(self, point: TelemetryPoint) -> TelemetryPoint:
         spec = self.measurement(point.measurement)
         unknown_fields = set(point.fields) - set(spec.fields)
-        missing_fields = set(spec.fields) - set(point.fields)
+        missing_fields = {
+            name for name, field_spec in spec.fields.items()
+            if field_spec.required and name not in point.fields
+        }
         unknown_tags = set(point.tags) - set(spec.tags)
         missing_tags = set(spec.tags) - set(point.tags)
         problems = []

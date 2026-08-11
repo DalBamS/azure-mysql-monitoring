@@ -31,3 +31,40 @@
   {"column":"Message",  "Properties":{"Path":"$.message"}}
 ]
 ```
+
+.create-or-alter table MysqlTelemetry ingestion json mapping "MysqlTelemetryMapping"
+```
+[
+  {"column":"Timestamp",       "Properties":{"Path":"$.ts"}},
+  {"column":"ContractVersion", "Properties":{"Path":"$.contract_version"}},
+  {"column":"RunId",           "Properties":{"Path":"$.run_id"}},
+  {"column":"TargetId",        "Properties":{"Path":"$.target_id"}},
+  {"column":"Host",            "Properties":{"Path":"$.host"}},
+  {"column":"AzureResourceId", "Properties":{"Path":"$.azure_resource_id"}},
+  {"column":"Tier",            "Properties":{"Path":"$.tier"}},
+  {"column":"Measurement",     "Properties":{"Path":"$.measurement"}},
+  {"column":"CollectorId",     "Properties":{"Path":"$.collector_id"}},
+  {"column":"SeriesKey",       "Properties":{"Path":"$.series_key"}},
+  {"column":"Tags",            "Properties":{"Path":"$.tags"}},
+  {"column":"Fields",          "Properties":{"Path":"$.fields"}}
+]
+```
+
+.create-or-alter table MysqlMetricSeries ingestion json mapping "MysqlMetricSeriesMapping"
+```
+[
+  {"column":"Timestamp",       "Properties":{"Path":"$.ts"}},
+  {"column":"ContractVersion", "Properties":{"Path":"$.contract_version"}},
+  {"column":"RunId",           "Properties":{"Path":"$.run_id"}},
+  {"column":"TargetId",        "Properties":{"Path":"$.target_id"}},
+  {"column":"Host",            "Properties":{"Path":"$.host"}},
+  {"column":"Tier",            "Properties":{"Path":"$.tier"}},
+  {"column":"Measurement",     "Properties":{"Path":"$.measurement"}},
+  {"column":"Field",           "Properties":{"Path":"$.field"}},
+  {"column":"Value",           "Properties":{"Path":"$.value"}},
+  {"column":"Kind",            "Properties":{"Path":"$.kind"}},
+  {"column":"Unit",            "Properties":{"Path":"$.unit"}},
+  {"column":"SeriesKey",       "Properties":{"Path":"$.series_key"}},
+  {"column":"Tags",            "Properties":{"Path":"$.tags"}}
+]
+```

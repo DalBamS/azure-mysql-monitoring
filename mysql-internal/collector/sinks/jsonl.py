@@ -55,6 +55,9 @@ class JsonlSink:
     def write_events(self, rows: Sequence[dict[str, Any]]) -> None:
         self._write(rows)
 
+    def write_points(self, points: Sequence[Any], _catalog: Any) -> None:
+        self._write([point.packed_row() for point in points])
+
     def close(self) -> None:
         if self._owns_handle:
             self._fh.close()

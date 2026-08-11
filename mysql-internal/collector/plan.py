@@ -265,6 +265,10 @@ def _compile_group(
     options = config.get("options", {})
     if not isinstance(options, dict):
         raise PlanError(f"{path}.options must be an object")
+    if options:
+        raise PlanError(
+            f"{path}.options has unknown keys: {', '.join(sorted(options))}"
+        )
     return GroupPlan(name=name, interval=interval, top_k=top_k, options=options)
 
 

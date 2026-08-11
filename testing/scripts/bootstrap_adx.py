@@ -29,6 +29,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_FILES = [
     REPO_ROOT / "adx" / "tables" / "MysqlMetrics.kql",
     REPO_ROOT / "adx" / "tables" / "MysqlEvents.kql",
+    REPO_ROOT / "adx" / "tables" / "MysqlTelemetry.kql",
     REPO_ROOT / "adx" / "tables" / "mappings.kql",
     REPO_ROOT / "adx" / "tables" / "materialized-views.kql",
     REPO_ROOT / "adx" / "tables" / "functions.kql",

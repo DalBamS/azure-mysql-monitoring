@@ -54,6 +54,12 @@ Production uses a YAML Collection Plan with references to environment variables 
 secrets; see [`collector/monitoring.example.yaml`](collector/monitoring.example.yaml). Literal
 credentials in YAML are invalid.
 
+```powershell
+python .\collector\plan.py .\collector\monitoring.yaml
+python .\collector\collector.py --config .\collector\monitoring.yaml `
+  --sink adx-streaming --sink jsonl --out .\telemetry.jsonl
+```
+
 The existing single-target compatibility runtime reads:
 
 | Variable | Description |
@@ -67,7 +73,8 @@ The existing single-target compatibility runtime reads:
 | `ADX_INGEST_URI` | ADX ingestion endpoint (ADX sink only) |
 | `ADX_DATABASE` | Target ADX database (ADX sink only) |
 
-The ADX sink authenticates with a **managed identity**, so `MYSQL_PASSWORD` is the only credential.
+ADX and Key Vault authenticate with the collector VM's **managed identity**; no Azure client secret
+is stored in the plan.
 
 ## Conventions
 

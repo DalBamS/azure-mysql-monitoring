@@ -26,8 +26,6 @@ profiles:
       statement-digests:
         interval: 1m
         top_k: 50
-        options:
-          include_digest_text: false
       schema-size:
         interval: 15m
         top_k: 500
@@ -55,8 +53,6 @@ profiles:
       statement-digests:
         interval: 30s
         top_k: 100
-        options:
-          include_digest_text: false
 
 targets:
   - id: server-a
@@ -90,4 +86,3 @@ targets:
         env: SERVER_B_MYSQL_USER
       password:
         env: SERVER_B_MYSQL_PASSWORD
-

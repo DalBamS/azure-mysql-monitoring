@@ -23,8 +23,12 @@ log = logging.getLogger(__name__)
 
 METRICS_TABLE = "MysqlMetrics"
 EVENTS_TABLE = "MysqlEvents"
+TELEMETRY_TABLE = "MysqlTelemetry"
+SERIES_TABLE = "MysqlMetricSeries"
 METRICS_MAPPING = "MysqlMetricsMapping"
 EVENTS_MAPPING = "MysqlEventsMapping"
+TELEMETRY_MAPPING = "MysqlTelemetryMapping"
+SERIES_MAPPING = "MysqlMetricSeriesMapping"
 
 # Well under the ~4 MB streaming cap. Rows are small, but a backlog flush after a stall can
 # be large, so batches are split rather than trusted to be small.
@@ -68,9 +72,11 @@ class AdxSink:
         self._format = DataFormat.MULTIJSON
         log.info("%s sink ready (database=%s)", self.name, self.database)
 
-    def _ingest(self, rows: Sequence[dict[str, Any]], table: str, mapping: str) -> None:
+    def _ingest(
+        self, rows: Sequence[dict[str, Any]], table: str, mapping: str
+    ) -> str | None:
         if not rows:
-            return
+            return None
 
         props = self._props(
             database=self.database,
@@ -85,20 +91,33 @@ class AdxSink:
                 payload = json.dumps(chunk, separators=(",", ":")).encode("utf-8")
                 stream = io.BytesIO(payload)
                 self._client.ingest_from_stream(stream, ingestion_properties=props)
-            self.last_error = None
+            return None
         except Exception as exc:  # noqa: BLE001 - ingestion must never kill the poll loop
-            self.last_error = str(exc)
             log.error(
                 "%s ingestion into %s failed: %s. Sampling continues; replay the JSONL "
                 "archive through the queued path to recover this window.",
                 self.name, table, exc,
             )
+            return str(exc)
 
     def write_metrics(self, rows: Sequence[dict[str, Any]]) -> None:
-        self._ingest(rows, METRICS_TABLE, METRICS_MAPPING)
+        self.last_error = self._ingest(rows, METRICS_TABLE, METRICS_MAPPING)
 
     def write_events(self, rows: Sequence[dict[str, Any]]) -> None:
-        self._ingest(rows, EVENTS_TABLE, EVENTS_MAPPING)
+        self.last_error = self._ingest(rows, EVENTS_TABLE, EVENTS_MAPPING)
+
+    def write_points(self, points: Sequence[Any], catalog: Any) -> None:
+        packed = [point.packed_row() for point in points]
+        series = [row for point in points for row in catalog.series_rows(point)]
+        errors = [
+            error
+            for error in (
+                self._ingest(packed, TELEMETRY_TABLE, TELEMETRY_MAPPING),
+                self._ingest(series, SERIES_TABLE, SERIES_MAPPING),
+            )
+            if error
+        ]
+        self.last_error = "; ".join(errors) if errors else None
 
     def close(self) -> None:
         close = getattr(self._client, "close", None)

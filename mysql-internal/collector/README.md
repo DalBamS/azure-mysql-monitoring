@@ -12,17 +12,21 @@ because its Azure platform metrics may be incomplete while the tier is in previe
 
 | File | Purpose |
 |---|---|
-| `collector.py` | Entry point: poll loop, interval, graceful shutdown, heartbeat |
+| `collector.py` | Entry point for Collection Plan and single-target compatibility modes |
 | `telemetry.py` | Versioned `measurement` / `tags` / `fields` contract and catalog validation |
+| `catalog.py` | Repository-owned field semantics, units and cardinality |
 | `plan.py` | Multi-target YAML Profile validation and Collection Job compilation |
 | `monitoring.example.yaml` | Safe example Profiles and Targets; contains secret references only |
+| `runtime.py` | Per-Target workers, independent cadence, reconnect/backoff and heartbeat |
+| `groups.py` | Collection Group registry and MySQL-to-telemetry conversion |
+| `secrets.py` | Environment and managed-identity Key Vault reference resolution |
 | `connection.py` | TLS-enforced connection factory built from environment variables |
 | `metrics.py` | Runs the queries in [`../sql/`](../sql/) and normalises results |
 | `events.py` | Cursor-based incremental read of `performance_schema.error_log` |
 | `sinks/jsonl.py` | Append-only JSON Lines writer (raw archive, cold-path source) |
 | `sinks/adx.py` | ADX streaming (hot) and queued (cold) ingestion — **optional extra** |
 | `requirements.txt` | Core: `mysql-connector-python` and PyYAML |
-| `requirements-adx.txt` | Extra: `azure-kusto-ingest`, `azure-identity` |
+| `requirements-adx.txt` | Azure extra: ADX clients, managed identity, and Key Vault secrets |
 
 ## Collection Plan (v2)
 
@@ -56,9 +60,24 @@ Profiles separate monitoring depth from code:
 | `deep-dive` | Opt-in table/index dimensions with top-K bounds |
 | `benchmark` | Short cadence for QPS, IO and latency, compared by `RUN_ID` |
 
-`plan.py` currently validates and compiles the v2 Collection Plan. The existing `collector.py`
-entrypoint remains the single-target compatibility runtime while each Collection Group is migrated
-to the new contract; it does not silently pretend that a multi-target YAML file is already running.
+Set the environment variables referenced by each Target, plus the ADX settings when an ADX sink is
+selected, then start the multi-target runtime:
+
+```bash
+export SERVER_A_RUN_ID="prod"
+export SERVER_A_MYSQL_USER="monitor"
+export ADX_CLUSTER_URI="https://<cluster>.<region>.kusto.windows.net"
+export ADX_INGEST_URI="https://ingest-<cluster>.<region>.kusto.windows.net"
+export ADX_DATABASE="<database>"
+
+python collector.py --config monitoring.yaml \
+  --sink adx-streaming --sink jsonl --out telemetry.jsonl
+```
+
+Each Target owns its MySQL connection, schedule, reconnect backoff and error-log cursor. One failed
+server therefore keeps emitting an unreachable heartbeat without blocking sibling Targets.
+Key Vault references use `DefaultAzureCredential`; assign the collector VM's managed identity
+permission to read only the named secrets.
 
 ## Single-target compatibility configuration
 
@@ -113,9 +132,9 @@ python collector.py --interval 5 --sink jsonl --out "..\..\benchmark-integration
 ## Rules
 
 - **Python 3.11+.** Core dependencies are `mysql-connector-python` and PyYAML. **No ORM.**
-- The **ADX sink is the one sanctioned exception**, isolated in `sinks/adx.py` and
-  `requirements-adx.txt` (`azure-kusto-ingest`, `azure-identity`). The core must import it lazily so
-  a benchmark run works with the core requirements alone.
+- **Azure integration is the sanctioned dependency exception**, isolated behind lazy imports and
+  `requirements-adx.txt` (`azure-kusto-ingest`, `azure-identity`, `azure-keyvault-secrets`). An
+  environment-only JSONL benchmark works with the core requirements alone.
 - **TLS is mandatory.** Azure sets `require_secure_transport=ON`; never disable SSL, and never
   fall back to an unencrypted connection.
 - MySQL 8.4 uses **`caching_sha2_password`** by default (`mysql_native_password` is disabled);

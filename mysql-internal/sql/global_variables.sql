@@ -1,0 +1,3 @@
+SELECT VARIABLE_NAME, VARIABLE_VALUE
+FROM performance_schema.global_variables
+ORDER BY VARIABLE_NAME

@@ -9,8 +9,8 @@
 -- Returns NULL when the buffer is empty; the collector then falls back to "now".
 --
 -- Inputs:   none
--- Returns:  Cursor (TIMESTAMP(6) or NULL)
+-- Returns:  newest logged timestamp (TIMESTAMP(6) or NULL)
 -- Consumer: collector/events.py
 
-SELECT MAX(LOGGED) AS Cursor
+SELECT MAX(LOGGED)
 FROM performance_schema.error_log;

@@ -1,6 +1,7 @@
-# ADX sink extra — the one sanctioned dependency exception, isolated so a benchmark run
-# works with requirements.txt alone. Imported lazily by sinks/adx.py.
+# Azure extras for ADX sinks and Key Vault references. Both are imported lazily, so an
+# environment-only JSONL run works with requirements.txt alone.
 -r requirements.txt
 azure-kusto-data>=4.5.0
 azure-kusto-ingest>=4.5.0
 azure-identity>=1.17.0
+azure-keyvault-secrets>=4.8.0

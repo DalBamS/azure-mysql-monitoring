@@ -1,0 +1,42 @@
+// MysqlTelemetry.kql — canonical version-2 Telemetry Points and their time-series projection.
+//
+// MysqlTelemetry keeps a measurement together with all of its tags and fields, matching the
+// collector's JSONL replay contract. MysqlMetricSeries contains only catalog fields marked for
+// dashboards, expanded to one numeric row per field. The two tables are ingested in the same sink
+// call; neither is reconstructed by parsing metric-name strings.
+
+.create-merge table MysqlTelemetry (
+    Timestamp:       datetime,
+    ContractVersion: int,
+    RunId:           string,
+    TargetId:        string,
+    Host:            string,
+    AzureResourceId: string,
+    Tier:            string,
+    CollectorId:     string,
+    Measurement:     string,
+    SeriesKey:       string,
+    Tags:            dynamic,
+    Fields:          dynamic
+)
+
+.alter table MysqlTelemetry docstring "Canonical measurement/tags/fields points from the multi-target collector. This is also the JSONL replay contract."
+
+.create-merge table MysqlMetricSeries (
+    Timestamp:       datetime,
+    ContractVersion: int,
+    RunId:           string,
+    TargetId:        string,
+    Host:            string,
+    Tier:            string,
+    Measurement:     string,
+    Field:           string,
+    Value:           real,
+    Kind:            string,
+    Unit:            string,
+    SeriesKey:       string,
+    Tags:            dynamic
+)
+
+.alter table MysqlMetricSeries docstring "Catalog-approved numeric fields projected from MysqlTelemetry for Grafana and alert queries."
+

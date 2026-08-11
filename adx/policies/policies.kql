@@ -13,6 +13,8 @@
 
 .alter table MysqlMetrics policy streamingingestion enable
 .alter table MysqlEvents  policy streamingingestion enable
+.alter table MysqlTelemetry    policy streamingingestion enable
+.alter table MysqlMetricSeries policy streamingingestion enable
 
 // ---------------------------------------------------------------------------
 // Batching — the cold path (JSONL replay, backfill, benchmark upload)
@@ -38,6 +40,24 @@
 }
 ```
 
+.alter table MysqlTelemetry policy ingestionbatching
+```
+{
+  "MaximumBatchingTimeSpan": "00:01:00",
+  "MaximumNumberOfItems": 500,
+  "MaximumRawDataSizeMB": 1024
+}
+```
+
+.alter table MysqlMetricSeries policy ingestionbatching
+```
+{
+  "MaximumBatchingTimeSpan": "00:01:00",
+  "MaximumNumberOfItems": 1000,
+  "MaximumRawDataSizeMB": 1024
+}
+```
+
 // ---------------------------------------------------------------------------
 // Retention — one 90-day lifecycle
 // ---------------------------------------------------------------------------
@@ -47,6 +67,8 @@
 
 .alter-merge table MysqlMetrics policy retention softdelete = 90d recoverability = disabled
 .alter-merge table MysqlEvents  policy retention softdelete = 90d recoverability = disabled
+.alter-merge table MysqlTelemetry    policy retention softdelete = 90d recoverability = disabled
+.alter-merge table MysqlMetricSeries policy retention softdelete = 90d recoverability = disabled
 
 .alter-merge materialized-view MysqlMetrics1m policy retention softdelete = 90d recoverability = disabled
 .alter-merge materialized-view MysqlEvents1m  policy retention softdelete = 90d recoverability = disabled
@@ -59,6 +81,8 @@
 
 .alter table MysqlMetrics policy caching hot = 7d
 .alter table MysqlEvents  policy caching hot = 14d
+.alter table MysqlTelemetry    policy caching hot = 7d
+.alter table MysqlMetricSeries policy caching hot = 14d
 
 .alter materialized-view MysqlMetrics1m policy caching hot = 90d
 .alter materialized-view MysqlEvents1m  policy caching hot = 90d

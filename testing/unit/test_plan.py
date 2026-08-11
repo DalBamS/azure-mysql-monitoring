@@ -113,6 +113,16 @@ targets:""",
         with self.assertRaisesRegex(PlanError, "safety floor"):
             load_plan(path)
 
+    def test_rejects_unknown_group_options(self) -> None:
+        path = write_plan(
+            BASE.replace(
+                "{interval: 10s}",
+                "{interval: 10s, options: {typo: true}}",
+            )
+        )
+        with self.assertRaisesRegex(PlanError, "unknown keys: typo"):
+            load_plan(path)
+
     def test_rejects_duplicate_target_ids(self) -> None:
         second = BASE.split("targets:\n", 1)[1]
         path = write_plan(BASE + second)
@@ -122,4 +132,3 @@ targets:""",
 
 if __name__ == "__main__":
     unittest.main()
-

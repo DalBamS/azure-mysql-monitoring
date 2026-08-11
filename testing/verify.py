@@ -305,7 +305,12 @@ def check_adx(report: Report, run_id: str) -> None:
         report.add("ADX reachable", FAIL, str(exc), "the operator has Admin on the database")
         return
 
-    for expected in ("MysqlMetrics", "MysqlEvents"):
+    for expected in (
+        "MysqlMetrics",
+        "MysqlEvents",
+        "MysqlTelemetry",
+        "MysqlMetricSeries",
+    ):
         if expected in tables:
             report.add(f"table {expected} exists", PASS)
         else:
@@ -313,13 +318,20 @@ def check_adx(report: Report, run_id: str) -> None:
 
     # Streaming ingestion must be enabled at BOTH cluster and table level. Enabled only on
     # the cluster, rows silently fall back to the queued path and "real-time" becomes minutes.
-    try:
-        policies = list(query(".show table MysqlMetrics policy streamingingestion"))
-        enabled = any("Enabled" in str(row.to_dict().get("Policy", "")) for row in policies)
-        report.add("streaming ingestion enabled on MysqlMetrics", PASS if enabled else FAIL,
-                   proves="the hot path is genuinely streaming, not queued batching")
-    except Exception as exc:  # noqa: BLE001
-        report.add("streaming ingestion enabled on MysqlMetrics", WARN, str(exc))
+    for table in ("MysqlMetrics", "MysqlTelemetry", "MysqlMetricSeries"):
+        try:
+            policies = list(query(f".show table {table} policy streamingingestion"))
+            enabled = any(
+                "Enabled" in str(row.to_dict().get("Policy", ""))
+                for row in policies
+            )
+            report.add(
+                f"streaming ingestion enabled on {table}",
+                PASS if enabled else FAIL,
+                proves="the hot path is genuinely streaming, not queued batching",
+            )
+        except Exception as exc:  # noqa: BLE001
+            report.add(f"streaming ingestion enabled on {table}", WARN, str(exc))
 
     try:
         views = {row["Name"] for row in query(".show materialized-views | project Name")}
@@ -336,6 +348,8 @@ def check_adx(report: Report, run_id: str) -> None:
     for entity_type, name in (
         ("table", "MysqlMetrics"),
         ("table", "MysqlEvents"),
+        ("table", "MysqlTelemetry"),
+        ("table", "MysqlMetricSeries"),
         ("materialized-view", "MysqlMetrics1m"),
         ("materialized-view", "MysqlEvents1m"),
     ):
@@ -344,10 +358,13 @@ def check_adx(report: Report, run_id: str) -> None:
             rows = list(query(f".show {entity_type} {name} policy retention"))
             policy = json.loads(rows[0]["Policy"]) if rows else {}
             actual = policy.get("SoftDeletePeriod", "(unset)")
+            recoverability = policy.get("Recoverability", "(unset)")
             report.add(
                 label,
-                PASS if actual == "90.00:00:00" else FAIL,
-                f"SoftDeletePeriod={actual}",
+                PASS
+                if actual == "90.00:00:00" and recoverability == "Disabled"
+                else FAIL,
+                f"SoftDeletePeriod={actual}, Recoverability={recoverability}",
                 proves="raw, event and rollup telemetry all expire after the requested 90 days",
             )
         except Exception as exc:  # noqa: BLE001
@@ -363,25 +380,61 @@ def check_adx(report: Report, run_id: str) -> None:
         cfg.require_adx()
         from sinks.adx import AdxSink
         from envelope import Envelope, utc_now
+        from catalog import CATALOG
+        from telemetry import TelemetryContext, TelemetryPoint
 
         sink = AdxSink(cfg, streaming=True)
         env = Envelope(run_id=run_id, host=cfg.host, tier=cfg.tier)
         probe_metric = f"verify_probe_{int(time.time())}"
+        probe_target = f"verify-probe-{int(time.time())}"
+        observed_at = utc_now()
         sent_at = time.monotonic()
-        sink.write_metrics([env.metric(utc_now(), "collector", probe_metric, 42.0)])
+        sink.write_metrics([env.metric(observed_at, "collector", probe_metric, 42.0)])
 
         if sink.last_error:
-            report.add("streaming ingestion accepted", FAIL, sink.last_error)
+            report.add("legacy streaming ingestion accepted", FAIL, sink.last_error)
             return
-        report.add("streaming ingestion accepted", PASS)
+        report.add("legacy streaming ingestion accepted", PASS)
+
+        sink.write_points(
+            [
+                TelemetryPoint(
+                    observed_at=observed_at,
+                    context=TelemetryContext(
+                        run_id=run_id,
+                        target_id=probe_target,
+                        host=cfg.host,
+                        tier=cfg.tier,
+                        collector_id="verify",
+                    ),
+                    measurement="mysql.global_status",
+                    fields={"Questions": 42.0},
+                )
+            ],
+            CATALOG,
+        )
+        if sink.last_error:
+            report.add("v2 streaming ingestion accepted", FAIL, sink.last_error)
+            return
+        report.add("v2 streaming ingestion accepted", PASS)
 
         deadline = sent_at + 90
         found = False
         while time.monotonic() < deadline:
-            rows = list(query(
-                f"MysqlMetrics | where Metric == '{probe_metric}' | count"
-            ))
-            if rows and rows[0]["Count"] > 0:
+            rows = list(
+                query(
+                    "print "
+                    f"Legacy=toscalar(MysqlMetrics | where Metric == '{probe_metric}' | count), "
+                    f"Packed=toscalar(MysqlTelemetry | where TargetId == '{probe_target}' | count), "
+                    f"Series=toscalar(MysqlMetricSeries | where TargetId == '{probe_target}' | count)"
+                )
+            )
+            if (
+                rows
+                and rows[0]["Legacy"] > 0
+                and rows[0]["Packed"] > 0
+                and rows[0]["Series"] >= 1
+            ):
                 found = True
                 break
             time.sleep(3)
@@ -389,11 +442,19 @@ def check_adx(report: Report, run_id: str) -> None:
         latency = time.monotonic() - sent_at
         if found:
             status = PASS if latency <= 60 else WARN
-            report.add("probe row queryable", status, f"{latency:.1f}s end to end",
-                       "the documented ~25-45s detection budget is achievable")
+            report.add(
+                "legacy and v2 probe rows queryable",
+                status,
+                f"{latency:.1f}s end to end",
+                "packed replay data and narrow Grafana series share the streaming hot path",
+            )
         else:
-            report.add("probe row queryable", FAIL, "not visible within 90s",
-                       "streaming ingestion may be silently falling back to the queued path")
+            report.add(
+                "legacy and v2 probe rows queryable",
+                FAIL,
+                "not all visible within 90s",
+                "streaming ingestion may be silently falling back to the queued path",
+            )
 
         sink.close()
     except Exception as exc:  # noqa: BLE001
@@ -418,10 +479,38 @@ def check_adx(report: Report, run_id: str) -> None:
         report.add("collector rows present in ADX", FAIL, str(exc))
 
     try:
+        rows = list(
+            query(
+                f"MysqlTelemetry | where RunId == '{run_id}' "
+                "| summarize Rows=count(), Measurements=dcount(Measurement), "
+                "Targets=dcount(TargetId), Versions=make_set(ContractVersion)"
+            )
+        )
+        if rows and rows[0]["Rows"] > 0:
+            r = rows[0]
+            valid = r["Versions"] == [2] and r["Targets"] > 0
+            report.add(
+                "v2 collector points present in ADX",
+                PASS if valid else FAIL,
+                f"{r['Rows']} packed rows, {r['Measurements']} measurements, "
+                f"{r['Targets']} Targets, contract versions={r['Versions']}",
+            )
+        else:
+            report.add(
+                "v2 collector points present in ADX",
+                WARN,
+                f"no v2 rows for RunId={run_id}",
+                "run collector.py --config monitoring.yaml with an ADX sink",
+            )
+    except Exception as exc:  # noqa: BLE001
+        report.add("v2 collector points present in ADX", FAIL, str(exc))
+
+    try:
         rows = list(query("CollectorHealth(15m) | project Host, Status, SecondsSinceLastBeat"))
         if rows:
             detail = "\n".join(
-                f"{r['Host']}: {r['Status']} ({r['SecondsSinceLastBeat']}s since last beat)"
+                f"{r['TargetId']} ({r['Host']}): {r['Status']} "
+                f"({r['SecondsSinceLastBeat']}s since last beat)"
                 for r in rows
             )
             report.add("CollectorHealth function works", PASS, detail,

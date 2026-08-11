@@ -7,7 +7,8 @@ one or more sinks.
     python collector.py --interval 5 --sink jsonl --out ../../benchmark-integration/runs/$RUN_ID.jsonl
     python collector.py --interval 10 --sink adx-streaming --sink jsonl
 
-Configuration comes exclusively from environment variables; see README.md.
+Use ``--config`` for a multi-target Collection Plan. Without it, the original environment-based
+single-target mode remains unchanged.
 """
 
 from __future__ import annotations
@@ -30,16 +31,24 @@ from sinks import build_sink
 log = logging.getLogger("collector")
 
 _shutdown = False
+_active_runtime: Any | None = None
 
 
 def _handle_signal(signum: int, _frame: Any) -> None:
     global _shutdown
     _shutdown = True
+    if _active_runtime is not None:
+        _active_runtime.shutdown()
     log.info("signal %s received; finishing the current cycle then exiting", signum)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Azure MySQL Flexible Server metrics collector")
+    p.add_argument(
+        "--config",
+        default=None,
+        help="Multi-target Collection Plan YAML. Omit for legacy environment mode.",
+    )
     p.add_argument(
         "--interval", type=float, default=10.0,
         help="Seconds between samples. Benchmarks use 1-5; production 10-15.",
@@ -62,17 +71,27 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--cursor-file", default=".error_log_cursor.json",
         help="Where the error_log ring-buffer cursor is persisted across restarts.",
     )
+    p.add_argument(
+        "--cursor-dir",
+        default=".error_log_cursors",
+        help="Directory for per-target error_log cursors in --config mode.",
+    )
     p.add_argument("--verbose", action="store_true")
     return p.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
+    global _shutdown
+    _shutdown = False
     args = parse_args(argv)
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
         stream=sys.stderr,  # stdout stays clean for the jsonl sink
     )
+
+    if args.config:
+        return _plan_main(args)
 
     try:
         cfg = Config.from_env()
@@ -123,6 +142,56 @@ def main(argv: list[str] | None = None) -> int:
         for sink in sinks:
             sink.close()
         conn.close()
+        log.info("collector stopped")
+
+
+def _plan_main(args: Any) -> int:
+    """Compile and execute a multi-target Collection Plan."""
+
+    global _active_runtime
+
+    from plan import PlanError, load_plan
+    from runtime import CollectionPlanRuntime, PlanSinkConfig
+
+    try:
+        collection_plan = load_plan(args.config)
+    except PlanError as exc:
+        log.error("invalid Collection Plan: %s", exc)
+        return 2
+
+    sinks = []
+    try:
+        sink_cfg = PlanSinkConfig.from_env()
+        for kind in args.sinks or ["jsonl"]:
+            sinks.append(build_sink(kind, sink_cfg, args.out))
+    except Exception as exc:  # noqa: BLE001 - surface setup failures clearly and exit
+        for sink in sinks:
+            sink.close()
+        log.error("could not build sink: %s", exc)
+        return 2
+
+    try:
+        runtime = CollectionPlanRuntime(
+            collection_plan,
+            sinks,
+            cursor_dir=args.cursor_dir,
+        )
+        _active_runtime = runtime
+        signal.signal(signal.SIGINT, _handle_signal)
+        signal.signal(signal.SIGTERM, _handle_signal)
+        log.info(
+            "starting Collection Plan: %d Targets, %d Collection Jobs",
+            len(collection_plan.targets),
+            len(collection_plan.jobs),
+        )
+        return runtime.run(max_cycles=args.max_cycles)
+    except Exception as exc:  # noqa: BLE001 - no partially-started runtime should escape
+        log.error("Collection Plan runtime failed: %s", exc)
+        return 3
+    finally:
+        _active_runtime = None
+        for sink in sinks:
+            sink.close()
         log.info("collector stopped")
 
 

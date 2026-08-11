@@ -78,6 +78,23 @@ class TelemetryContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ContractError, "unknown fields: surprise; missing fields"):
             self.catalog.validate(point)
 
+    def test_optional_fields_may_be_absent(self) -> None:
+        catalog = MetricCatalog(
+            [
+                MeasurementSpec(
+                    name="optional",
+                    fields={
+                        "required": FieldSpec(FieldKind.GAUGE, "count", int),
+                        "optional": FieldSpec(
+                            FieldKind.STATE, "text", str, series=False, required=False
+                        ),
+                    },
+                )
+            ]
+        )
+        point = self.point(measurement="optional", fields={"required": 1})
+        self.assertIs(catalog.validate(point), point)
+
     def test_catalog_rejects_wrong_value_type(self) -> None:
         point = self.point(fields={"questions_total": 100.5, "threads_running": 3})
         with self.assertRaisesRegex(ContractError, "expects int"):
@@ -152,4 +169,3 @@ class TelemetryContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

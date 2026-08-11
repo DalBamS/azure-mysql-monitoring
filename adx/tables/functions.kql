@@ -38,10 +38,21 @@
 .create-or-alter function with (docstring="Seconds since the last heartbeat, per host", folder="mysql")
     CollectorHealth(lookback: timespan = 15m)
 {
-    MysqlMetrics
-    | where Timestamp > ago(lookback)
-    | where Metric == "collector_heartbeat"
-    | summarize LastBeat = max(Timestamp) by Host, RunId
+    let V2 =
+        MysqlMetricSeries
+        | where Timestamp > ago(lookback)
+        | where Measurement == "collector.health" and Field == "heartbeat"
+        | project Timestamp, TargetId, Host, RunId;
+    let V2Hosts = V2 | distinct Host, RunId;
+    let Legacy =
+        MysqlMetrics
+        | where Timestamp > ago(lookback)
+        | where Metric == "collector_heartbeat"
+        | project Timestamp, TargetId=Host, Host, RunId
+        | join kind=leftanti V2Hosts on Host, RunId
+        | project Timestamp, TargetId, Host, RunId;
+    union V2, Legacy
+    | summarize LastBeat = max(Timestamp) by TargetId, Host, RunId
     | extend SecondsSinceLastBeat = datetime_diff('second', now(), LastBeat)
     | extend Status = iff(SecondsSinceLastBeat > 60, "DOWN", "OK")
 }
