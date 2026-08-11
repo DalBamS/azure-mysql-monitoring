@@ -91,6 +91,21 @@ class PerformanceReportTests(unittest.TestCase):
 
         self.assertIn("'v1''bad'", query)
 
+    def test_benchmark_errors_exclude_schema_less_service_statements(self) -> None:
+        functions = (
+            Path(__file__).parents[2] / "adx" / "tables" / "functions.kql"
+        ).read_text(encoding="utf-8")
+        query_tail = functions.split("let QueryTail =", 1)[1].split(
+            "let QueryErrors =", 1
+        )[0]
+        query_errors = functions.split("let QueryErrors =", 1)[1].split(
+            "let RedoLogWaits =", 1
+        )[0]
+
+        schema_filter = '| where tostring(Tags.schema) !in ("", "(none)")'
+        self.assertIn(schema_filter, query_tail)
+        self.assertIn(schema_filter, query_errors)
+
 
 if __name__ == "__main__":
     unittest.main()

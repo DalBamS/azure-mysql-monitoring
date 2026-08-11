@@ -29,6 +29,8 @@ flowchart LR
 | [`RESULTS.md`](RESULTS.md) | Preserved conclusion from the latest approved three-run comparison |
 | [`deploy-pair.ps1`](deploy-pair.ps1) | Deploys matched MySQL 8.4 Premium SSD v1/v2 Targets in an explicit subscription |
 | [`run-pair.ps1`](run-pair.ps1) | Runs both Targets concurrently for three repetitions and generates ADX reports |
+| [`run-open-loop-pair.ps1`](run-open-loop-pair.ps1) | Runs fixed-rate read-heavy repetitions with a working set larger than a temporary reduced buffer pool |
+| [`open_loop_workload.py`](open_loop_workload.py) | Prepares, runs and removes the deterministic open-loop dataset |
 | [`upload_jsonl.py`](upload_jsonl.py) | Bulk-projects and uploads a completed JSONL archive to ADX |
 | [`bicep/`](bicep/) | Ephemeral cross-subscription benchmark pair |
 | `report/` | Generated summaries and charts |
@@ -108,3 +110,19 @@ record this unavoidable CPU-generation confound and must not attribute every del
 `run-pair.ps1` generates a collision-resistant batch ID by default. For a named run, pass
 `-BatchId storage-final-20260811`; the command fails rather than overwriting an existing batch or
 reusing its ADX `RUN_ID` values.
+
+For a fixed offered-rate comparison that produces physical reads, use:
+
+```powershell
+.\run-open-loop-pair.ps1 `
+  -MonitoringSubscription '<monitoring-subscription-id>' `
+  -BatchId storage-open-loop-20260811
+```
+
+The wrapper first verifies that the ADX query endpoint is available, then temporarily sets both
+`innodb_buffer_pool_size` values to 1 GiB, creates identical 2 GiB datasets, and runs three 80%-read
+repetitions at 500 operations/s. A changed buffer-pool configuration is followed by an explicit
+server stop/start cycle so a delayed Azure service restart cannot interrupt dataset preparation or
+the workload. Cleanup starts a stopped server when necessary, removes the datasets, and restores and
+recycles the original buffer-pool configuration in `finally`. Workload JSON records scheduled,
+completed, dropped, error and end-to-end p50/p95/p99 values for each Target.

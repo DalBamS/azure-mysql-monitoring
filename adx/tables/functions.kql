@@ -142,6 +142,7 @@
         | where RunId in (baselineRun, candidateRun)
         | where Measurement == "mysql.statement_digest"
         | where Field in ("latency_p95_ms", "latency_p99_ms")
+        | where tostring(Tags.schema) !in ("", "(none)")
         | summarize Value=max(Value) by Timestamp, RunId, TargetId, Host, Tier, Field
         | extend Metric=iff(Field == "latency_p95_ms", "Query p95 ms", "Query p99 ms")
         | project Timestamp, RunId, TargetId, Host, Tier, Metric, Value;
@@ -149,6 +150,9 @@
         union
             (MetricSeriesRate("mysql.statement_digest", "errors_total", baselineRun, startTime, endTime)),
             (MetricSeriesRate("mysql.statement_digest", "errors_total", candidateRun, startTime, endTime))
+        // Flexible Server service probes can produce schema-less failures. Benchmark errors
+        // must represent statements attributed to the workload schema.
+        | where tostring(Tags.schema) !in ("", "(none)")
         | summarize Value=sum(Rate) by Timestamp, RunId, TargetId, Host, Tier
         | extend Metric="Query errors/s"
         | project Timestamp, RunId, TargetId, Host, Tier, Metric, Value;

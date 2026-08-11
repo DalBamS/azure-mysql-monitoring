@@ -14,7 +14,13 @@ param(
     [int]$Threads = 8,
     [int]$Seed = 42,
     [int]$CollectorCycles = 36,
-    [string]$BatchId = ''
+    [string]$BatchId = '',
+    [ValidateSet('closed-loop', 'open-loop')]
+    [string]$WorkloadMode = 'closed-loop',
+    [int]$OfferedRate = 500,
+    [ValidateRange(0, 100)]
+    [int]$ReadPercent = 80,
+    [double]$MaxLagSeconds = 2.0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -23,7 +29,8 @@ $repoRoot = Split-Path -Parent $root
 $benchmarkEnv = Join-Path $root '.env.benchmark'
 $monitoringEnv = Join-Path $repoRoot 'testing\.env'
 $collector = Join-Path $repoRoot 'mysql-internal\collector\collector.py'
-$workload = Join-Path $repoRoot 'testing\scripts\workload.py'
+$closedLoopWorkload = Join-Path $repoRoot 'testing\scripts\workload.py'
+$openLoopWorkload = Join-Path $root 'open_loop_workload.py'
 $reporter = Join-Path $root 'performance_report.py'
 $uploader = Join-Path $root 'upload_jsonl.py'
 
@@ -55,8 +62,14 @@ function Assert-ProcessSucceeded(
     }
 }
 
-if ($Repetitions -lt 1 -or $Seconds -lt 30 -or $Threads -lt 1 -or $CollectorCycles -lt 1) {
-    throw 'Repetitions, Threads and CollectorCycles must be positive; Seconds must be at least 30.'
+if (
+    $Repetitions -lt 1 -or $Seconds -lt 30 -or $Threads -lt 1 -or
+    $CollectorCycles -lt 1 -or $OfferedRate -lt 1 -or $MaxLagSeconds -le 0
+) {
+    throw (
+        'Repetitions, Threads, CollectorCycles and OfferedRate must be positive; ' +
+        'Seconds must be at least 30 and MaxLagSeconds must be greater than zero.'
+    )
 }
 
 # Load ADX first, then benchmark credentials. The second file intentionally replaces MySQL values.
@@ -95,6 +108,26 @@ for ($rep = 1; $rep -le $Repetitions; $rep++) {
     $candidateRun = "ssdv2-$batch-r$rep"
     $repDir = Join-Path $batchDir "r$rep"
     New-Item -ItemType Directory -Path $repDir | Out-Null
+
+    if ($WorkloadMode -eq 'open-loop') {
+        $env:MYSQL_HOST = $env:BASELINE_MYSQL_HOST
+        $env:MYSQL_TIER = $env:BASELINE_TIER
+        $env:RUN_ID = $baselineRun
+        & python $openLoopWorkload reset-digests `
+            --result (Join-Path $repDir 'baseline-digest-reset.json')
+        if ($LASTEXITCODE -ne 0) {
+            throw "Statement digest reset failed for baseline repetition $rep."
+        }
+
+        $env:MYSQL_HOST = $env:CANDIDATE_MYSQL_HOST
+        $env:MYSQL_TIER = $env:CANDIDATE_TIER
+        $env:RUN_ID = $candidateRun
+        & python $openLoopWorkload reset-digests `
+            --result (Join-Path $repDir 'candidate-digest-reset.json')
+        if ($LASTEXITCODE -ne 0) {
+            throw "Statement digest reset failed for candidate repetition $rep."
+        }
+    }
 
     $configPath = Join-Path $repDir 'collector.yaml'
     $resourceBase = (
@@ -185,10 +218,27 @@ targets:
     $env:RUN_ID = $baselineRun
     $baselineOut = Join-Path $repDir 'baseline.stdout.log'
     $baselineErr = Join-Path $repDir 'baseline.stderr.log'
+    $baselineArgs = if ($WorkloadMode -eq 'open-loop') {
+        @(
+            $openLoopWorkload, 'run',
+            '--seconds', $Seconds,
+            '--threads', $Threads,
+            '--rate', $OfferedRate,
+            '--read-percent', $ReadPercent,
+            '--seed', ($Seed + $rep),
+            '--max-lag-seconds', $MaxLagSeconds,
+            '--result', (Join-Path $repDir 'baseline-workload.json')
+        )
+    } else {
+        @(
+            $closedLoopWorkload,
+            '--seconds', $Seconds,
+            '--threads', $Threads,
+            '--seed', ($Seed + $rep)
+        )
+    }
     $baselineProcess = Start-Process python -PassThru -NoNewWindow `
-        -ArgumentList @(
-            $workload, '--seconds', $Seconds, '--threads', $Threads, '--seed', ($Seed + $rep)
-        ) `
+        -ArgumentList $baselineArgs `
         -RedirectStandardOutput $baselineOut `
         -RedirectStandardError $baselineErr
 
@@ -197,10 +247,27 @@ targets:
     $env:RUN_ID = $candidateRun
     $candidateOut = Join-Path $repDir 'candidate.stdout.log'
     $candidateErr = Join-Path $repDir 'candidate.stderr.log'
+    $candidateArgs = if ($WorkloadMode -eq 'open-loop') {
+        @(
+            $openLoopWorkload, 'run',
+            '--seconds', $Seconds,
+            '--threads', $Threads,
+            '--rate', $OfferedRate,
+            '--read-percent', $ReadPercent,
+            '--seed', ($Seed + $rep),
+            '--max-lag-seconds', $MaxLagSeconds,
+            '--result', (Join-Path $repDir 'candidate-workload.json')
+        )
+    } else {
+        @(
+            $closedLoopWorkload,
+            '--seconds', $Seconds,
+            '--threads', $Threads,
+            '--seed', ($Seed + $rep)
+        )
+    }
     $candidateProcess = Start-Process python -PassThru -NoNewWindow `
-        -ArgumentList @(
-            $workload, '--seconds', $Seconds, '--threads', $Threads, '--seed', ($Seed + $rep)
-        ) `
+        -ArgumentList $candidateArgs `
         -RedirectStandardOutput $candidateOut `
         -RedirectStandardError $candidateErr
 
