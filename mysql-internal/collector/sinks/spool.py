@@ -326,11 +326,11 @@ class DurableSpoolSink:
     def _apply_terminal_statuses(self) -> int:
         completed = 0
         submitted = {
-            _submitted_source_id(path): path
+            _submitted_source_id(path).lower(): path
             for path in self.config.directory.glob("*/*.submitted.*.jsonl")
         }
         for outcome, message in self.replay_sink.pop_ingestion_statuses():
-            source_id = str(getattr(message, "IngestionSourceId", ""))
+            source_id = str(getattr(message, "IngestionSourceId", "")).lower()
             segment = submitted.get(source_id)
             if segment is None:
                 log.debug("ignoring queued ingestion status for unknown source %s", source_id)

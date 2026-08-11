@@ -33,7 +33,7 @@ class FakeAdxSink:
         source_id = str(uuid.uuid4())
         if ingestion_tag:
             self.statuses.append(
-                ("success", SimpleNamespace(IngestionSourceId=source_id))
+                ("success", SimpleNamespace(IngestionSourceId=source_id.upper()))
             )
         return [source_id]
 
