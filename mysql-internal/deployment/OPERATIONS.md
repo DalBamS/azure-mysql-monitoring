@@ -29,9 +29,9 @@ quarantines it as `.corrupt`. Successful streaming segments are deleted immediat
 through ADX queued ingestion and retained until ADX reports terminal success. If the success status
 is lost, the collector resubmits with the same `ingest-if-not-exists` tag.
 
-Queued submission is at-least-once. A crash after ADX accepts a request but before local deletion
-can create duplicate rows. Dashboard queries aggregate by timestamp/Target/series and tolerate this;
-never claim exactly-once delivery.
+Queued replay uses a content-derived `ingest-by` tag and `ingest-if-not-exists`. If a terminal status
+is lost, resubmission with the same tag does not create a second extent. Streaming ingestion still
+has normal transport ambiguity, so dashboard queries remain tolerant of duplicate observations.
 
 ## Recovery
 
