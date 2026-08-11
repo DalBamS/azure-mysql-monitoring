@@ -141,7 +141,7 @@ class AdxSink:
         )
         return self.last_source_ids
 
-    def pop_ingestion_statuses(self, limit: int = 1000) -> list[tuple[str, Any]]:
+    def pop_ingestion_statuses(self, limit: int = 32) -> list[tuple[str, Any]]:
         """Return terminal queued-ingestion statuses.
 
         Status reporting is enabled only for queued ingestion. The durable spool
