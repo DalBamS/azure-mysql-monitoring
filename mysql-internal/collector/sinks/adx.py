@@ -46,12 +46,17 @@ class AdxSink:
             KustoStreamingIngestClient,
             QueuedIngestClient,
         )
+        from azure.kusto.ingest.ingestion_properties import ReportLevel
+        from azure.kusto.ingest.status import KustoIngestStatusQueues
         from azure.kusto.data.data_format import DataFormat
 
         self.name = "adx-streaming" if streaming else "adx-queued"
         self.streaming = streaming
         self.database = cfg.adx_database
         self.last_error: str | None = None
+        self.last_source_ids: list[str] = []
+        self._status_queues: Any | None = None
+        self._report_level = ReportLevel
 
         credential = DefaultAzureCredential(exclude_interactive_browser_credential=False)
 
@@ -67,44 +72,104 @@ class AdxSink:
                 cfg.adx_ingest_uri, credential
             )
             self._client = QueuedIngestClient(kcsb)
+            self._status_queues = KustoIngestStatusQueues(self._client)
 
         self._props = IngestionProperties
         self._format = DataFormat.MULTIJSON
         log.info("%s sink ready (database=%s)", self.name, self.database)
 
     def _ingest(
-        self, rows: Sequence[dict[str, Any]], table: str, mapping: str
-    ) -> str | None:
+        self,
+        rows: Sequence[dict[str, Any]],
+        table: str,
+        mapping: str,
+        ingestion_tag: str | None = None,
+    ) -> tuple[str | None, list[str]]:
         if not rows:
-            return None
+            return None, []
 
+        property_args: dict[str, Any] = {
+            "database": self.database,
+            "table": table,
+            "data_format": self._format,
+            "ingestion_mapping_reference": mapping,
+        }
+        if not self.streaming and ingestion_tag:
+            property_args["report_level"] = self._report_level.FailuresAndSuccesses
+            property_args["ingest_by_tags"] = [ingestion_tag]
+            property_args["ingest_if_not_exists"] = [f"ingest-by:{ingestion_tag}"]
         props = self._props(
-            database=self.database,
-            table=table,
-            data_format=self._format,
-            ingestion_mapping_reference=mapping,
+            **property_args
         )
 
         try:
+            source_ids = []
             for start in range(0, len(rows), MAX_ROWS_PER_REQUEST):
                 chunk = rows[start : start + MAX_ROWS_PER_REQUEST]
                 payload = json.dumps(chunk, separators=(",", ":")).encode("utf-8")
                 stream = io.BytesIO(payload)
-                self._client.ingest_from_stream(stream, ingestion_properties=props)
-            return None
+                result = self._client.ingest_from_stream(
+                    stream, ingestion_properties=props
+                )
+                source_id = getattr(result, "source_id", None)
+                if source_id is not None:
+                    source_ids.append(str(source_id))
+            return None, source_ids
         except Exception as exc:  # noqa: BLE001 - ingestion must never kill the poll loop
             log.error(
                 "%s ingestion into %s failed: %s. Sampling continues; replay the JSONL "
                 "archive through the queued path to recover this window.",
                 self.name, table, exc,
             )
-            return str(exc)
+            return str(exc), []
+
+    def write_raw_rows(
+        self,
+        rows: Sequence[dict[str, Any]],
+        table: str,
+        mapping: str,
+        ingestion_tag: str | None = None,
+    ) -> list[str]:
+        """Ingest an already-projected batch.
+
+        The durable spool stores the exact table projection so replay never has to
+        reconstruct a TelemetryPoint or depend on a newer catalog.
+        """
+
+        self.last_error, self.last_source_ids = self._ingest(
+            rows, table, mapping, ingestion_tag
+        )
+        return self.last_source_ids
+
+    def pop_ingestion_statuses(self, limit: int = 1000) -> list[tuple[str, Any]]:
+        """Return terminal queued-ingestion statuses.
+
+        Status reporting is enabled only for queued ingestion. The durable spool
+        owns this client and is therefore the only consumer of these queues.
+        """
+
+        if self._status_queues is None:
+            return []
+        try:
+            failures = [
+                ("failure", message)
+                for message in self._status_queues.failure.pop(limit)
+            ]
+            successes = [
+                ("success", message)
+                for message in self._status_queues.success.pop(limit)
+            ]
+            return failures + successes
+        except Exception as exc:  # noqa: BLE001 - status polling retries next cycle
+            self.last_error = f"queued ingestion status poll failed: {exc}"
+            log.warning("%s", self.last_error)
+            return []
 
     def write_metrics(self, rows: Sequence[dict[str, Any]]) -> None:
-        self.last_error = self._ingest(rows, METRICS_TABLE, METRICS_MAPPING)
+        self.write_raw_rows(rows, METRICS_TABLE, METRICS_MAPPING)
 
     def write_events(self, rows: Sequence[dict[str, Any]]) -> None:
-        self.last_error = self._ingest(rows, EVENTS_TABLE, EVENTS_MAPPING)
+        self.write_raw_rows(rows, EVENTS_TABLE, EVENTS_MAPPING)
 
     def write_points(self, points: Sequence[Any], catalog: Any) -> None:
         packed = [point.packed_row() for point in points]
@@ -112,8 +177,8 @@ class AdxSink:
         errors = [
             error
             for error in (
-                self._ingest(packed, TELEMETRY_TABLE, TELEMETRY_MAPPING),
-                self._ingest(series, SERIES_TABLE, SERIES_MAPPING),
+                self._ingest(packed, TELEMETRY_TABLE, TELEMETRY_MAPPING)[0],
+                self._ingest(series, SERIES_TABLE, SERIES_MAPPING)[0],
             )
             if error
         ]

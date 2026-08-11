@@ -38,4 +38,13 @@ def build_sink(kind: str, cfg: Any, out_path: str | None) -> Sink:
 
         return AdxSink(cfg, streaming=(kind == "adx-streaming"))
 
-    raise ValueError(f"unknown sink {kind!r}; expected jsonl, adx-streaming or adx-queued")
+    if kind == "adx-resilient":
+        cfg.require_adx()
+        from sinks.spool import DurableSpoolSink, SpoolConfig
+
+        return DurableSpoolSink.from_adx_config(cfg, SpoolConfig.from_env())
+
+    raise ValueError(
+        f"unknown sink {kind!r}; expected jsonl, adx-streaming, adx-queued "
+        "or adx-resilient"
+    )

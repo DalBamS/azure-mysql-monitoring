@@ -1,0 +1,26 @@
+#cloud-config
+package_update: true
+packages:
+  - ca-certificates
+  - git
+  - jq
+  - python3
+  - python3-venv
+
+users:
+  - default
+  - name: mysqlmon
+    system: true
+    shell: /usr/sbin/nologin
+    no_create_home: true
+
+write_files:
+  - path: /etc/tmpfiles.d/azure-mysql-monitoring.conf
+    permissions: "0644"
+    content: |
+      d /var/lib/azure-mysql-monitoring 0750 mysqlmon mysqlmon -
+      d /var/lib/azure-mysql-monitoring/cursors 0750 mysqlmon mysqlmon -
+      d /var/lib/azure-mysql-monitoring/spool 0750 mysqlmon mysqlmon -
+
+runcmd:
+  - [systemd-tmpfiles, --create, /etc/tmpfiles.d/azure-mysql-monitoring.conf]

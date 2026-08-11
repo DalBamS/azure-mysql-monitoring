@@ -234,7 +234,17 @@ class RuntimeTests(unittest.TestCase):
 
         expected = cursor_path_for_target("cursors", "orders")
         self.assertEqual(seen, [expected])
-        self.assertEqual(sink.events, [{"source": "error_log", "message": "event"}])
+        self.assertEqual(
+            sink.events,
+            [
+                {
+                    "source": "error_log",
+                    "message": "event",
+                    "target_id": "orders",
+                    "collector_id": "collector-1",
+                }
+            ],
+        )
 
     def test_target_failure_does_not_prevent_sibling_collection(self) -> None:
         sink = FakeSink()

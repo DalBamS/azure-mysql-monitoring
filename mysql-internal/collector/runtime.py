@@ -354,7 +354,14 @@ class TargetWorker:
         if not self._error_reader_loaded:
             self._error_reader.load_cursor(self._connection)
             self._error_reader_loaded = True
-        events = list(self._error_reader.poll(self._connection))
+        events = [
+            {
+                **event,
+                "target_id": self.target.target_id,
+                "collector_id": self._collector_id,
+            }
+            for event in self._error_reader.poll(self._connection)
+        ]
         is_connected = getattr(self._connection, "is_connected", None)
         if callable(is_connected) and not is_connected():
             raise ConnectionError("MySQL connection was lost while reading error_log")

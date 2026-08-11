@@ -16,7 +16,7 @@ collector, and Grafana dashboards.
 | An Azure Database for MySQL Flexible Server, **8.4** | 8.0 will mostly work but is not tested here |
 | Azure CLI, logged in | `az login`, then `az account set -s <subscription>` |
 | Python **3.11+** | For the collector and the verification scripts |
-| A VM, container or host to run the collector | It must reach MySQL on 3306 over TLS |
+| A VM to run the collector | Deploy the production package in [`mysql-internal/deployment/`](mysql-internal/deployment/) |
 | `Contributor` on the resource group | Needed to create the workspace, ADX cluster and Grafana |
 
 ```bash
@@ -162,31 +162,27 @@ Run it once in the foreground to confirm it connects:
 python mysql-internal/collector/collector.py --interval 10 --max-cycles 3 --sink adx-streaming --verbose
 ```
 
-Then run it as a service. `--sink jsonl` alongside `--sink adx-streaming` keeps a local replayable
-copy, which is what lets a rejected ingestion window be recovered rather than lost:
+Deploy the production VM and systemd package from
+[`mysql-internal/deployment/`](mysql-internal/deployment/). It provides:
 
-```ini
-# /etc/systemd/system/mysql-collector.service
-[Unit]
-Description=Azure MySQL monitoring collector
-After=network-online.target
+- no public VM NIC or public SSH path;
+- stable NAT egress for MySQL firewall allow-listing;
+- managed-identity Key Vault secret reads and ADX database ingestion;
+- a dedicated non-root service account and hardened systemd unit;
+- persistent per-Target error-log cursors;
+- a bounded, per-Target JSONL spool that automatically replays ADX failures through queued ingestion.
 
-[Service]
-Type=simple
-User=mysqlmon
-EnvironmentFile=/etc/mysql-collector.env
-ExecStart=/usr/bin/python3 /opt/azure-mysql-monitoring/mysql-internal/collector/collector.py \
-  --interval 10 --sink adx-streaming --sink jsonl --out /var/log/mysql-collector/metrics.jsonl \
-  --cursor-file /var/lib/mysql-collector/error_log.cursor
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
+```bash
+sudo mysql-internal/deployment/scripts/install.sh
+sudoedit /etc/azure-mysql-monitoring/monitoring.yaml
+sudoedit /etc/azure-mysql-monitoring/collector.env
+sudo systemctl enable --now azure-mysql-monitoring.service
+sudo mysql-internal/deployment/scripts/health-check.sh
 ```
 
-Keep `--cursor-file` on persistent storage. It records how far through the `error_log` ring buffer
-the collector has read; losing it means re-reading or skipping events across a restart.
+The spool is at-least-once: a crash after ADX accepts a request but before local deletion can create
+duplicates. It never deletes older pending data to make room. When its hard limit is reached, new
+batches are rejected with a CRITICAL journal entry so disk exhaustion cannot be silent.
 
 Production intervals of 10–15s are a deliberate trade: benchmarks use 1–5s for resolution, but that
 rate against a production server is a meaningful query load of its own.
@@ -278,6 +274,8 @@ a dead server. Use commitment tiers to control cost instead.
 | `AzureDiagnostics` empty | Server parameters not set — see Step 1b |
 | Collector authentication fails | Client library too old for `caching_sha2_password` |
 | Collector connection times out | Firewall rule missing, or your public IP changed |
+| Service runs but ADX data stops | Run deployment `health-check.sh`; inspect pending spool and managed-identity roles |
+| Spool grows continuously | ADX streaming and queued endpoints are both unreachable or denied |
 | ADX deployment fails ~10 min in | SKU unavailable in that region — check `az kusto cluster list-sku` |
 | Grafana panels empty, no error | Metric name case is wrong; names are case-sensitive |
 | Dashboards import but show nothing | Run `check-dashboard-queries.py` — it distinguishes a broken query from genuinely absent data |

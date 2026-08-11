@@ -55,8 +55,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument(
         "--sink", action="append", dest="sinks", default=None,
-        choices=["jsonl", "adx-streaming", "adx-queued"],
-        help="Repeatable. Run jsonl alongside an ADX sink so a rejected window can be replayed.",
+        choices=["jsonl", "adx-streaming", "adx-queued", "adx-resilient"],
+        help=(
+            "Repeatable. Production uses adx-resilient for durable local buffering "
+            "and queued replay."
+        ),
     )
     p.add_argument("--out", default=None, help="JSONL output path (default: stdout)")
     p.add_argument(

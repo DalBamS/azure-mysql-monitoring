@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "vmName": {
+      "value": "mysql-monitoring-collector"
+    },
+    "sshPublicKey": {
+      "value": "REPLACE-with-an-ssh-public-key"
+    },
+    "keyVaultName": {
+      "value": "REPLACE-existing-or-new-vault-name"
+    },
+    "createKeyVault": {
+      "value": false
+    },
+    "keyVaultSecretNames": {
+      "value": [
+        "orders-mysql-password"
+      ]
+    },
+    "adxClusterName": {
+      "value": "REPLACE-adx-cluster-name"
+    },
+    "adxDatabaseName": {
+      "value": "mysqlmonitoring"
+    },
+    "mysqlServerName": {
+      "value": "REPLACE-mysql-flexible-server-name"
+    }
+  }
+}

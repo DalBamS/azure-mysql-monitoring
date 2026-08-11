@@ -22,13 +22,15 @@
 [
   {"column":"Timestamp","Properties":{"Path":"$.ts"}},
   {"column":"RunId",    "Properties":{"Path":"$.run_id"}},
+  {"column":"TargetId", "Properties":{"Path":"$.target_id"}},
   {"column":"Host",     "Properties":{"Path":"$.host"}},
   {"column":"Tier",     "Properties":{"Path":"$.tier"}},
   {"column":"Source",   "Properties":{"Path":"$.source"}},
   {"column":"Level",    "Properties":{"Path":"$.level"}},
   {"column":"ErrorCode","Properties":{"Path":"$.error_code"}},
   {"column":"Subsystem","Properties":{"Path":"$.subsystem"}},
-  {"column":"Message",  "Properties":{"Path":"$.message"}}
+  {"column":"Message",  "Properties":{"Path":"$.message"}},
+  {"column":"CollectorId","Properties":{"Path":"$.collector_id"}}
 ]
 ```
 

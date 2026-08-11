@@ -1,0 +1,50 @@
+version: 1
+
+profiles:
+  standard:
+    groups:
+      collector-health:
+        interval: 10s
+      global-status:
+        interval: 10s
+      innodb-metrics:
+        interval: 30s
+      error-log:
+        interval: 10s
+      global-variables:
+        interval: 15m
+
+  extended:
+    extends: standard
+    allow_high_cardinality: true
+    groups:
+      file-io:
+        interval: 1m
+        top_k: 100
+      process-states:
+        interval: 1m
+      statement-digests:
+        interval: 1m
+        top_k: 50
+      schema-size:
+        interval: 15m
+        top_k: 500
+
+targets:
+  - id: orders
+    host: REPLACE.mysql.database.azure.com
+    port: 3306
+    database: REPLACE
+    tier: premium-ssd-v2
+    profile: extended
+    ssl_ca: /etc/ssl/certs/ca-certificates.crt
+    azure_resource_id: /subscriptions/REPLACE/resourceGroups/REPLACE/providers/Microsoft.DBforMySQL/flexibleServers/REPLACE
+    run_id:
+      env: ORDERS_RUN_ID
+    credentials:
+      username:
+        env: ORDERS_MYSQL_USER
+      password:
+        key_vault:
+          vault_uri: https://REPLACE.vault.azure.net
+          secret: orders-mysql-password

@@ -8,6 +8,7 @@ Azure Database for MySQL Flexible Server, independent of Azure Monitor.
 | Directory | Purpose |
 |---|---|
 | [`collector/`](collector/) | Python 3.11+ multi-target collector, telemetry contract and YAML plan |
+| [`deployment/`](deployment/) | Production VM Bicep, systemd service, durable spool and runbook |
 | [`sql/`](sql/) | `performance_schema` / `information_schema` Collection Group queries |
 
 Collected rows land in [`../adx/`](../adx/), the unified store that
@@ -57,7 +58,7 @@ credentials in YAML are invalid.
 ```powershell
 python .\collector\plan.py .\collector\monitoring.yaml
 python .\collector\collector.py --config .\collector\monitoring.yaml `
-  --sink adx-streaming --sink jsonl --out .\telemetry.jsonl
+  --sink adx-resilient
 ```
 
 The existing single-target compatibility runtime reads:

@@ -148,6 +148,7 @@ flatlined chart otherwise reads as healthy.
 | [`azure-native/alerts/`](azure-native/alerts/) | Alert rules and thresholds |
 | [`mysql-internal/`](mysql-internal/) | In-server telemetry (Layer 2) |
 | [`mysql-internal/collector/`](mysql-internal/collector/) | Python collector |
+| [`mysql-internal/deployment/`](mysql-internal/deployment/) | Production collector VM, systemd, durable spool and runbook |
 | [`mysql-internal/sql/`](mysql-internal/sql/) | `SHOW GLOBAL STATUS` / `performance_schema` queries |
 | [`adx/`](adx/) | **Unified store** for metrics and log events |
 | [`adx/bicep/`](adx/bicep/) | Cluster, database, identities and role assignments |

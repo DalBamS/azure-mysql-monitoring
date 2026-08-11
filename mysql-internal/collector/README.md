@@ -25,6 +25,7 @@ because its Azure platform metrics may be incomplete while the tier is in previe
 | `events.py` | Cursor-based incremental read of `performance_schema.error_log` |
 | `sinks/jsonl.py` | Append-only JSON Lines writer (raw archive, cold-path source) |
 | `sinks/adx.py` | ADX streaming (hot) and queued (cold) ingestion — **optional extra** |
+| `sinks/spool.py` | Bounded per-Target durable spool and automatic queued replay |
 | `requirements.txt` | Core: `mysql-connector-python` and PyYAML |
 | `requirements-adx.txt` | Azure extra: ADX clients, managed identity, and Key Vault secrets |
 
@@ -71,13 +72,26 @@ export ADX_INGEST_URI="https://ingest-<cluster>.<region>.kusto.windows.net"
 export ADX_DATABASE="<database>"
 
 python collector.py --config monitoring.yaml \
-  --sink adx-streaming --sink jsonl --out telemetry.jsonl
+  --sink adx-resilient
 ```
 
 Each Target owns its MySQL connection, schedule, reconnect backoff and error-log cursor. One failed
 server therefore keeps emitting an unreachable heartbeat without blocking sibling Targets.
 Key Vault references use `DefaultAzureCredential`; assign the collector VM's managed identity
 permission to read only the named secrets.
+
+Production uses `adx-resilient`: every final table projection is written and `fsync`ed to a
+per-Target JSONL segment before streaming ingestion. Successful segments are removed; failures are
+replayed automatically through queued ingestion. Configure it with:
+
+| Variable | Default | Purpose |
+|---|---:|---|
+| `COLLECTOR_SPOOL_DIR` | `/var/lib/azure-mysql-monitoring/spool` | Persistent spool path |
+| `COLLECTOR_SPOOL_MAX_BYTES` | `1073741824` | Hard disk limit; existing data wins over new batches |
+| `COLLECTOR_SPOOL_REPLAY_SECONDS` | `30` | Queued replay cadence |
+| `COLLECTOR_SPOOL_CONFIRMATION_TIMEOUT_SECONDS` | `3600` | Idempotent resubmit timeout when terminal status is missing |
+
+See [`../deployment/`](../deployment/) for the production VM, service and operating runbook.
 
 ## Single-target compatibility configuration
 
@@ -197,9 +211,10 @@ Field names map to the ADX columns via the ingestion mappings in
 | `jsonl` | local file per `RUN_ID` | n/a | Raw archive, benchmark artifact, cold-path source |
 | `adx-streaming` | ADX streaming ingestion | seconds | **Production real-time monitoring** |
 | `adx-queued` | ADX queued ingestion | batching window | Bulk replay, backfill, benchmark upload |
+| `adx-resilient` | local spool → streaming/queued ADX | seconds normally | **Production service** |
 
-Run `jsonl` alongside an ADX sink in production: the file is the local buffer that lets you replay
-a window if ingestion was rejected.
+Use `adx-resilient` in production. A standalone `jsonl` sink remains useful for benchmark artifacts,
+but it cannot distinguish already-ingested rows and therefore is not the production recovery path.
 
 Queued ingestion batches for up to **5 minutes** by default, so it cannot carry real-time
 monitoring — that is what `adx-streaming` is for. Streaming has a **~4 MB per-request limit**, so
