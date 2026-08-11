@@ -26,6 +26,11 @@ flowchart LR
 | `runs/` | Per-run raw JSONL, one file per `RUN_ID` (git-ignored) |
 | [`performance_report.py`](performance_report.py) | Generates a direction-aware Markdown comparison from ADX |
 | [`PERFORMANCE_EVALUATION.md`](PERFORMANCE_EVALUATION.md) | Grafana analysis and reporting method |
+| [`RESULTS.md`](RESULTS.md) | Preserved conclusion from the latest approved three-run comparison |
+| [`deploy-pair.ps1`](deploy-pair.ps1) | Deploys matched MySQL 8.4 Premium SSD v1/v2 Targets in an explicit subscription |
+| [`run-pair.ps1`](run-pair.ps1) | Runs both Targets concurrently for three repetitions and generates ADX reports |
+| [`upload_jsonl.py`](upload_jsonl.py) | Bulk-projects and uploads a completed JSONL archive to ADX |
+| [`bicep/`](bicep/) | Ephemeral cross-subscription benchmark pair |
 | `report/` | Generated summaries and charts |
 
 ## Why the collector is the primary source
@@ -95,3 +100,11 @@ python performance_report.py \
   conclusions in a Markdown report; keep raw JSONL outside Git for replay.
 
 See [`PERFORMANCE_EVALUATION.md`](PERFORMANCE_EVALUATION.md) for the complete workflow.
+
+Premium SSD v2 currently requires v6 compute while Premium SSD v1 is rejected on v6. The deployment
+therefore uses the closest 8-vCore/64-GiB pair: E8ds v5 for v1 and E8ds v6 for v2. Reports must
+record this unavoidable CPU-generation confound and must not attribute every delta solely to storage.
+
+`run-pair.ps1` generates a collision-resistant batch ID by default. For a named run, pass
+`-BatchId storage-final-20260811`; the command fails rather than overwriting an existing batch or
+reusing its ADX `RUN_ID` values.

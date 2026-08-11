@@ -52,19 +52,27 @@ CREATE TABLE IF NOT EXISTS monitoring_load (
 _stop = threading.Event()
 
 
-def _random_payload(size: int = 200) -> str:
+def _random_payload(rng: random.Random, size: int = 200) -> str:
     alphabet = string.ascii_letters + string.digits
-    return "".join(random.choices(alphabet, k=size))
+    return "".join(rng.choices(alphabet, k=size))
 
 
-def worker(cfg: Config, worker_id: int, stats: dict) -> None:
+def worker(
+    cfg: Config,
+    worker_id: int,
+    seed: int,
+    stats: dict[int, dict[str, int]],
+    failures: dict[int, str],
+) -> None:
     """One connection running a mixed read/write workload until stopped."""
     try:
         conn = connect(cfg)
     except Exception as exc:  # noqa: BLE001
         log.error("worker %d could not connect: %s", worker_id, exc)
+        failures[worker_id] = str(exc)
         return
 
+    rng = random.Random(seed + worker_id)
     local = {"inserts": 0, "selects": 0, "updates": 0, "heavy": 0}
 
     try:
@@ -72,7 +80,7 @@ def worker(cfg: Config, worker_id: int, stats: dict) -> None:
             while not _stop.is_set():
                 # Writes: dirty pages, redo log traffic, eventual flushes to storage.
                 rows = [
-                    (cfg.run_id, random.randint(1, 50), _random_payload())
+                    (cfg.run_id, rng.randint(1, 50), _random_payload(rng))
                     for _ in range(25)
                 ]
                 cur.executemany(
@@ -83,31 +91,33 @@ def worker(cfg: Config, worker_id: int, stats: dict) -> None:
                 local["inserts"] += len(rows)
 
                 # Indexed reads: mostly buffer-pool hits.
+                read_bucket = rng.randint(1, 50)
                 cur.execute(
                     "SELECT COUNT(*), MAX(id) FROM monitoring_load WHERE bucket = %s",
-                    (random.randint(1, 50),),
+                    (read_bucket,),
                 )
-                cur.fetchall()
+                _, latest_id = cur.fetchone()
                 local["selects"] += 1
 
-                # Updates: row locks and dirty-page churn.
-                cur.execute(
-                    "UPDATE monitoring_load SET payload = %s "
-                    "WHERE bucket = %s ORDER BY id DESC LIMIT 10",
-                    (_random_payload(), random.randint(1, 50)),
-                )
-                local["updates"] += 1
+                # Update one primary-key row. Multi-row ORDER BY updates make worker survival
+                # depend on random deadlocks, invalidating a storage comparison.
+                if latest_id is not None:
+                    cur.execute(
+                        "UPDATE monitoring_load SET payload = %s WHERE id = %s",
+                        (_random_payload(rng), latest_id),
+                    )
+                    local["updates"] += 1
 
                 # A deliberately bad query, roughly every tenth iteration: no usable index,
                 # forces a temporary table, and with long_query_time=0 it lands in the slow
                 # query log. This is what gives Layer 1 something to show.
-                if random.random() < 0.1:
+                if rng.random() < 0.1:
                     cur.execute(
                         "SELECT bucket, COUNT(*) c, AVG(LENGTH(payload)) a "
                         "FROM monitoring_load "
                         "WHERE payload LIKE %s "
                         "GROUP BY bucket ORDER BY c DESC",
-                        (f"%{_random_payload(3)}%",),
+                        (f"%{_random_payload(rng, 3)}%",),
                     )
                     cur.fetchall()
                     local["heavy"] += 1
@@ -115,16 +125,17 @@ def worker(cfg: Config, worker_id: int, stats: dict) -> None:
                 time.sleep(0.05)
     except Exception as exc:  # noqa: BLE001
         log.error("worker %d stopped: %s", worker_id, exc)
+        failures[worker_id] = str(exc)
     finally:
         conn.close()
-        for key, value in local.items():
-            stats[key] = stats.get(key, 0) + value
+        stats[worker_id] = local
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate MySQL load for monitoring verification")
     parser.add_argument("--seconds", type=int, default=180, help="How long to run")
     parser.add_argument("--threads", type=int, default=2, help="Concurrent connections")
+    parser.add_argument("--seed", type=int, default=42, help="Deterministic per-worker seed")
     parser.add_argument("--keep-table", action="store_true", help="Do not drop the load table")
     args = parser.parse_args()
 
@@ -149,9 +160,14 @@ def main() -> int:
     setup.close()
     log.info("load table ready")
 
-    stats: dict = {}
+    stats: dict[int, dict[str, int]] = {}
+    failures: dict[int, str] = {}
     threads = [
-        threading.Thread(target=worker, args=(cfg, i, stats), daemon=True)
+        threading.Thread(
+            target=worker,
+            args=(cfg, i, args.seed, stats, failures),
+            daemon=True,
+        )
         for i in range(args.threads)
     ]
 
@@ -173,7 +189,15 @@ def main() -> int:
         for t in threads:
             t.join(timeout=10)
 
-    log.info("done: %s", stats or "no work recorded")
+    totals = {
+        key: sum(worker_stats.get(key, 0) for worker_stats in stats.values())
+        for key in ("inserts", "selects", "updates", "heavy")
+    }
+    log.info("done: %s", totals if stats else "no work recorded")
+    workload_failed = bool(failures) or len(stats) != args.threads
+    if workload_failed:
+        failed_workers = sorted(set(failures) | (set(range(args.threads)) - set(stats)))
+        log.error("workload incomplete; failed workers: %s", failed_workers)
 
     if not args.keep_table:
         try:
@@ -187,7 +211,7 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001
             log.warning("could not drop the load table: %s", exc)
 
-    return 0
+    return 4 if workload_failed else 0
 
 
 if __name__ == "__main__":
