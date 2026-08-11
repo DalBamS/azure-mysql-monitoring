@@ -98,7 +98,7 @@ resource networkSecurityGroup 'Microsoft.Network/networkSecurityGroups@2024-05-0
       {
         name: 'AllowPrivateEndpointsOutbound'
         properties: {
-          priority: 90
+          priority: 100
           direction: 'Outbound'
           access: 'Allow'
           protocol: 'Tcp'
@@ -114,7 +114,7 @@ resource networkSecurityGroup 'Microsoft.Network/networkSecurityGroups@2024-05-0
       {
         name: 'AllowMySqlOutbound'
         properties: {
-          priority: 100
+          priority: 110
           direction: 'Outbound'
           access: 'Allow'
           protocol: 'Tcp'
@@ -127,7 +127,7 @@ resource networkSecurityGroup 'Microsoft.Network/networkSecurityGroups@2024-05-0
       {
         name: 'AllowHttpsOutbound'
         properties: {
-          priority: 110
+          priority: 120
           direction: 'Outbound'
           access: 'Allow'
           protocol: 'Tcp'
@@ -140,7 +140,7 @@ resource networkSecurityGroup 'Microsoft.Network/networkSecurityGroups@2024-05-0
       {
         name: 'AllowPackageHttpOutbound'
         properties: {
-          priority: 120
+          priority: 130
           direction: 'Outbound'
           access: 'Allow'
           protocol: 'Tcp'
@@ -153,27 +153,27 @@ resource networkSecurityGroup 'Microsoft.Network/networkSecurityGroups@2024-05-0
       {
         name: 'AllowAzurePlatformDns'
         properties: {
-          priority: 130
+          priority: 140
           direction: 'Outbound'
           access: 'Allow'
           protocol: 'Udp'
           sourcePortRange: '*'
           destinationPortRange: '53'
           sourceAddressPrefix: 'VirtualNetwork'
-          destinationAddressPrefix: 'AzurePlatformDNS'
+          destinationAddressPrefix: '168.63.129.16/32'
         }
       }
       {
         name: 'AllowAzureInstanceMetadata'
         properties: {
-          priority: 140
+          priority: 150
           direction: 'Outbound'
           access: 'Allow'
           protocol: 'Tcp'
           sourcePortRange: '*'
           destinationPortRange: '80'
           sourceAddressPrefix: 'VirtualNetwork'
-          destinationAddressPrefix: 'AzurePlatformIMDS'
+          destinationAddressPrefix: '169.254.169.254/32'
         }
       }
       {
@@ -209,6 +209,7 @@ resource virtualNetwork 'Microsoft.Network/virtualNetworks@2024-05-01' = {
         properties: {
           addressPrefix: subnetPrefix
           defaultOutboundAccess: false
+          privateEndpointNetworkPolicies: 'Disabled'
           natGateway: {
             id: natGateway.id
           }
@@ -320,12 +321,81 @@ resource createdKeyVault 'Microsoft.KeyVault/vaults@2023-07-01' = if (createKeyV
     enableSoftDelete: true
     softDeleteRetentionInDays: 90
     enablePurgeProtection: true
-    publicNetworkAccess: 'Enabled'
+    publicNetworkAccess: 'Disabled'
+    networkAcls: {
+      bypass: 'AzureServices'
+      defaultAction: 'Deny'
+    }
     sku: {
       family: 'A'
       name: 'standard'
     }
   }
+}
+
+resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' existing = if (!empty(keyVaultName)) {
+  name: keyVaultName
+}
+
+resource keyVaultPrivateDnsZone 'Microsoft.Network/privateDnsZones@2024-06-01' = if (!empty(keyVaultName)) {
+  name: 'privatelink.vaultcore.azure.net'
+  location: 'global'
+  tags: tags
+}
+
+resource keyVaultDnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = if (!empty(keyVaultName)) {
+  parent: keyVaultPrivateDnsZone
+  name: '${vmName}-keyvault'
+  location: 'global'
+  properties: {
+    registrationEnabled: false
+    virtualNetwork: {
+      id: virtualNetwork.id
+    }
+  }
+}
+
+resource keyVaultPrivateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' = if (!empty(keyVaultName)) {
+  name: '${vmName}-keyvault'
+  location: location
+  tags: tags
+  properties: {
+    subnet: {
+      id: resourceId('Microsoft.Network/virtualNetworks/subnets', virtualNetwork.name, subnetName)
+    }
+    privateLinkServiceConnections: [
+      {
+        name: 'vault'
+        properties: {
+          privateLinkServiceId: keyVault.id
+          groupIds: [
+            'vault'
+          ]
+        }
+      }
+    ]
+  }
+  dependsOn: [
+    createdKeyVault
+  ]
+}
+
+resource keyVaultDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (!empty(keyVaultName)) {
+  parent: keyVaultPrivateEndpoint
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'keyvault'
+        properties: {
+          privateDnsZoneId: keyVaultPrivateDnsZone.id
+        }
+      }
+    ]
+  }
+  dependsOn: [
+    keyVaultDnsLink
+  ]
 }
 
 module access 'modules/access.bicep' = if ((!empty(keyVaultName) && length(keyVaultSecretNames) > 0) || (!empty(adxClusterName) && !empty(adxDatabaseName))) {

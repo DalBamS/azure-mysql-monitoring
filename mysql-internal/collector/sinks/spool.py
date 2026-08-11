@@ -178,14 +178,20 @@ class DurableSpoolSink:
                     errors.append(message)
                     continue
 
-                self.live_sink.write_raw_rows(chunk, table, mapping)
+                try:
+                    self.live_sink.write_raw_rows(chunk, table, mapping)
+                except Exception as exc:  # noqa: BLE001 - preserve before surfacing sink fault
+                    self.live_sink.last_error = str(exc)
                 if self.live_sink.last_error:
                     errors.append(str(self.live_sink.last_error))
+                    ready = _ready_path_from_live(segment)
+                    segment.replace(ready)
+                    _fsync_directory(segment.parent)
                     log.warning(
                         "streaming ingestion failed for %s/%s; retained %s for queued replay",
                         target,
                         table,
-                        segment,
+                        ready,
                     )
                 else:
                     self._remove_segment(segment)
@@ -207,7 +213,7 @@ class DurableSpoolSink:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
         stem = f"{stamp}-{uuid.uuid4().hex}-{table}"
         temporary = target_dir / f"{stem}.tmp"
-        ready = target_dir / f"{stem}.ready.jsonl"
+        live = target_dir / f"{stem}.live.jsonl"
         encoded = [
             json.dumps(
                 {"table": table, "mapping": mapping, "row": row},
@@ -230,9 +236,9 @@ class DurableSpoolSink:
                     handle.write(line)
                 handle.flush()
                 os.fsync(handle.fileno())
-            temporary.replace(ready)
+            temporary.replace(live)
             _fsync_directory(target_dir)
-        return ready
+        return live
 
     def _mark_overflow(self, reason: str) -> None:
         marker = self.config.directory / ".overflow"
@@ -376,10 +382,19 @@ class DurableSpoolSink:
                 log.exception("unexpected durable spool replay failure")
 
     def _recover_temporary_segments(self) -> None:
-        for temporary in self.config.directory.glob("*/*.tmp"):
+        abandoned = [
+            *self.config.directory.glob("*/*.tmp"),
+            *self.config.directory.glob("*/*.live.jsonl"),
+        ]
+        for temporary in abandoned:
             try:
                 _read_segment(temporary)
-                temporary.replace(temporary.with_suffix(".ready.jsonl"))
+                ready = (
+                    temporary.with_suffix(".ready.jsonl")
+                    if temporary.suffix == ".tmp"
+                    else _ready_path_from_live(temporary)
+                )
+                temporary.replace(ready)
                 _fsync_directory(temporary.parent)
             except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
                 corrupt = temporary.with_suffix(".corrupt")
@@ -455,6 +470,10 @@ def _submitted_source_id(path: Path) -> str:
 
 def _ready_path(path: Path) -> Path:
     return path.with_name(path.name.split(".submitted.", 1)[0] + ".ready.jsonl")
+
+
+def _ready_path_from_live(path: Path) -> Path:
+    return path.with_name(path.name.removesuffix(".live.jsonl") + ".ready.jsonl")
 
 
 def _failed_path(path: Path) -> Path:

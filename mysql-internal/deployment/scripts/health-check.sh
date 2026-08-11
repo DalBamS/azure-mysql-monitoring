@@ -18,7 +18,11 @@ systemctl is-active --quiet azure-mysql-monitoring.service || {
   exit 2
 }
 
-pending_files="$(find "$spool_dir" -type f -name '*.ready.jsonl' -print 2>/dev/null | wc -l)"
+pending_files="$(
+  find "$spool_dir" -type f \
+    \( -name '*.ready.jsonl' -o -name '*.submitted.*.jsonl' \) \
+    -print 2>/dev/null | wc -l
+)"
 corrupt_files="$(find "$spool_dir" -type f -name '*.corrupt' -print 2>/dev/null | wc -l)"
 failed_files="$(find "$spool_dir" -type f -name '*.failed.jsonl' -print 2>/dev/null | wc -l)"
 pending_bytes="$(du -sb "$spool_dir" 2>/dev/null | awk '{print $1}')"

@@ -1,8 +1,8 @@
 # Collector VM deployment
 
 Production packaging for the multi-Target collector: a Linux VM with no public NIC, stable NAT
-egress, system-assigned managed identity, least-privilege Key Vault/ADX access, a hardened systemd
-unit, persistent cursor state and bounded durable spool.
+egress, system-assigned managed identity, private-endpoint Key Vault access, least-privilege
+Key Vault/ADX roles, a hardened systemd unit, persistent cursor state and bounded durable spool.
 
 ## Contents
 
@@ -20,7 +20,8 @@ unit, persistent cursor state and bounded durable spool.
 
 The template creates no inbound Internet path. Administration requires Azure Bastion, private
 network access, or `az vm run-command`. Its NAT public IP is stable and can be added to an existing
-Flexible Server firewall by setting `mysqlServerName`.
+Flexible Server firewall by setting `mysqlServerName`. Key Vault public access is disabled; the
+template creates its private endpoint and `privatelink.vaultcore.azure.net` DNS link.
 
 ```bash
 cd mysql-internal/deployment/bicep

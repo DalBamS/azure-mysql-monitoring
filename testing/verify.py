@@ -509,7 +509,12 @@ def check_adx(report: Report, run_id: str) -> None:
         report.add("v2 collector points present in ADX", FAIL, str(exc))
 
     try:
-        rows = list(query("CollectorHealth(15m) | project Host, Status, SecondsSinceLastBeat"))
+        rows = list(
+            query(
+                "CollectorHealth(15m) "
+                "| project TargetId, Host, Status, SecondsSinceLastBeat"
+            )
+        )
         if rows:
             detail = "\n".join(
                 f"{r['TargetId']} ({r['Host']}): {r['Status']} "

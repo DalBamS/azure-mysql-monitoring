@@ -82,6 +82,31 @@ class DurableSpoolTests(unittest.TestCase):
             self.assertEqual(sink.pending_segments(), [])
             sink.close()
 
+    def test_replay_ignores_batch_while_streaming_is_in_flight(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            queued = FakeAdxSink()
+
+            class RacingLiveSink(FakeAdxSink):
+                owner: DurableSpoolSink
+
+                def write_raw_rows(
+                    self, rows, table, mapping, ingestion_tag=None
+                ) -> list[str]:
+                    self.owner.replay_once()
+                    return super().write_raw_rows(
+                        rows, table, mapping, ingestion_tag
+                    )
+
+            live = RacingLiveSink()
+            sink = self.build(Path(directory), live, queued)
+            live.owner = sink
+
+            sink.write_points([sample_point()], CATALOG)
+
+            self.assertEqual(queued.calls, [])
+            self.assertEqual(sink.pending_segments(), [])
+            sink.close()
+
     def test_failed_streaming_is_replayed_through_queued_ingestion(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             live, queued = FakeAdxSink(error="ADX unavailable"), FakeAdxSink()
