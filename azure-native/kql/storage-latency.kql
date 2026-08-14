@@ -1,0 +1,57 @@
+// storage-latency.kql — storage utilisation and IO pressure, for SSD v1 vs v2 comparison
+//
+// Input:    AzureMetrics
+// Consumed by: azure-native/workbooks/, benchmark-integration/
+//
+// IMPORTANT — this query is supplementary during benchmarks, not authoritative.
+// Premium SSD v2 is in preview, and platform telemetry for v2-backed servers may be
+// incomplete. A flat or missing series here means "no data from the platform", which is
+// visually identical to "no IO happened". The authoritative storage signal during a
+// benchmark is the Innodb_data_* counters the Layer 2 collector writes to ADX; see
+// grafana/dashboards/benchmark-ssd-v1-vs-v2.json.
+//
+// Flexible Server exposes io_consumption_percent — the fraction of the provisioned IOPS
+// budget in use — but no read/write latency metric. Latency has to be inferred from the
+// engine side, which is another reason Layer 2 leads here.
+
+let lookback = 24h;
+let bucket = 5m;
+AzureMetrics
+| where TimeGenerated > ago(lookback)
+| where MetricName in (
+    'io_consumption_percent',
+    'storage_percent',
+    'storage_used',
+    'storage_limit',
+    'data_storage_used',
+    'binlog_storage_used',
+    'Innodb_data_writes',
+    'Innodb_buffer_pool_reads',
+    'Innodb_buffer_pool_read_requests'
+  )
+| summarize Avg = avg(Average), Max = max(Maximum) by bin(TimeGenerated, bucket), MetricName, Resource
+| order by TimeGenerated asc
+
+// --- Buffer pool hit ratio from platform metrics ---------------------------------------
+// Sustained dips mean the working set has outgrown the buffer pool, which turns logical
+// reads into physical ones and makes the storage tier suddenly matter a great deal.
+//
+// AzureMetrics
+// | where TimeGenerated > ago(24h)
+// | where MetricName in ('Innodb_buffer_pool_reads', 'Innodb_buffer_pool_read_requests')
+// | summarize Value = sum(Total) by bin(TimeGenerated, 5m), MetricName
+// | evaluate pivot(MetricName, sum(Value))
+// | where Innodb_buffer_pool_read_requests > 0
+// | extend HitRatio = 1.0 - (Innodb_buffer_pool_reads * 1.0 / Innodb_buffer_pool_read_requests)
+// | project TimeGenerated, HitRatio
+// | order by TimeGenerated asc
+
+// --- Storage headroom ------------------------------------------------------------------
+// Flexible Server storage cannot be shrunk, and autogrow has a ceiling. Trend this rather
+// than alerting only on a threshold, so the runway is known before it is short.
+//
+// AzureMetrics
+// | where TimeGenerated > ago(30d)
+// | where MetricName == 'storage_percent'
+// | summarize MaxPercent = max(Maximum) by bin(TimeGenerated, 1h), Resource
+// | order by TimeGenerated asc

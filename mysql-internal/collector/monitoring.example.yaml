@@ -1,0 +1,88 @@
+version: 1
+
+profiles:
+  standard:
+    groups:
+      collector-health:
+        interval: 10s
+      global-status:
+        interval: 10s
+      innodb-metrics:
+        interval: 30s
+      error-log:
+        interval: 10s
+      global-variables:
+        interval: 15m
+
+  extended:
+    extends: standard
+    allow_high_cardinality: true
+    groups:
+      file-io:
+        interval: 1m
+        top_k: 100
+      process-states:
+        interval: 1m
+      statement-digests:
+        interval: 1m
+        top_k: 50
+      schema-size:
+        interval: 15m
+        top_k: 500
+
+  deep-dive:
+    extends: extended
+    groups:
+      table-io:
+        interval: 5m
+        top_k: 100
+      index-io:
+        interval: 5m
+        top_k: 100
+
+  benchmark:
+    extends: extended
+    groups:
+      global-status:
+        interval: 5s
+      innodb-metrics:
+        interval: 10s
+      file-io:
+        interval: 30s
+        top_k: 100
+      statement-digests:
+        interval: 30s
+        top_k: 100
+
+targets:
+  - id: server-a
+    host: <server-a>.mysql.database.azure.com
+    port: 3306
+    database: <application-database>
+    tier: premium-ssd-v1
+    profile: standard
+    azure_resource_id: /subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.DBforMySQL/flexibleServers/<server-a>
+    run_id:
+      env: SERVER_A_RUN_ID
+    credentials:
+      username:
+        env: SERVER_A_MYSQL_USER
+      password:
+        key_vault:
+          vault_uri: https://<key-vault>.vault.azure.net
+          secret: server-a-mysql-password
+
+  - id: server-b
+    host: <server-b>.mysql.database.azure.com
+    port: 3306
+    database: <application-database>
+    tier: premium-ssd-v2
+    profile: benchmark
+    azure_resource_id: /subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.DBforMySQL/flexibleServers/<server-b>
+    run_id:
+      env: SERVER_B_RUN_ID
+    credentials:
+      username:
+        env: SERVER_B_MYSQL_USER
+      password:
+        env: SERVER_B_MYSQL_PASSWORD

@@ -1,0 +1,35 @@
+// MysqlMetrics.kql — numeric samples from the Layer 2 collector.
+//
+// Applied via testing/scripts/bootstrap_adx.py or CI. Never typed ad hoc into the Kusto UI:
+// grafana/dashboards/ references these column names directly.
+//
+// Idempotent: .create-merge tolerates re-application and adds columns rather than failing.
+
+.create-merge table MysqlMetrics (
+    Timestamp: datetime,      // UTC — Kusto datetime is always UTC
+    RunId:     string,        // RUN_ID env var; 'prod' sentinel outside benchmarks
+    Host:      string,
+    Tier:      string,        // premium-ssd-v1 | premium-ssd-v2
+    Source:    string,        // global_status | ps_digest | collector
+    Metric:    string,
+    Value:     real
+)
+
+// `.alter table ... docstring` is the only accepted form here — `.alter-merge` is rejected for
+// docstrings, and KQL does not concatenate adjacent string literals, so this stays one string.
+.alter table MysqlMetrics docstring "Numeric samples collected from MySQL 8.4 by mysql-internal/collector. Values are raw cumulative counters; derive rates at query time so counter resets stay visible."
+
+// Ordering the index by Metric first makes the common dashboard filter (one metric across a
+// time range) hit far fewer extents than the default column order would.
+.alter table MysqlMetrics policy partitioning
+```
+{
+  "PartitionKeys": [
+    {
+      "ColumnName": "Metric",
+      "Kind": "Hash",
+      "Properties": { "Function": "XxHash64", "MaxPartitionCount": 128, "Seed": 1 }
+    }
+  ]
+}
+```

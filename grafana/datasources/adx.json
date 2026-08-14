@@ -1,0 +1,20 @@
+{
+  "name": "Azure Data Explorer",
+  "uid": "mysqlmon-adx",
+  "type": "grafana-azure-data-explorer-datasource",
+  "access": "proxy",
+  "isDefault": true,
+  "jsonData": {
+    "clusterUrl": "${ADX_CLUSTER_URI}",
+    "defaultDatabase": "${ADX_DATABASE}",
+    "azureCredentials": {
+      "authType": "msi"
+    },
+    "dataConsistency": "strongconsistency",
+    "defaultEditorMode": "raw",
+    "queryTimeout": "30s",
+    "dynamicCaching": false
+  },
+  "secureJsonData": {},
+  "readOnly": false
+}

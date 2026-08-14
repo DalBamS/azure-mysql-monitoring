@@ -1,0 +1,8 @@
+SELECT
+    COALESCE(COMMAND, '(none)'),
+    COALESCE(STATE, '(none)'),
+    COUNT(*),
+    MAX(TIME)
+FROM information_schema.PROCESSLIST
+GROUP BY COMMAND, STATE
+ORDER BY COUNT(*) DESC, MAX(TIME) DESC

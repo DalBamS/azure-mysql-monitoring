@@ -1,0 +1,12 @@
+SELECT
+    OBJECT_SCHEMA,
+    OBJECT_NAME,
+    INDEX_NAME,
+    COUNT_FETCH,
+    SUM_TIMER_FETCH
+FROM performance_schema.table_io_waits_summary_by_index_usage
+WHERE OBJECT_SCHEMA NOT IN (%s, %s, %s, %s)
+  AND INDEX_NAME IS NOT NULL
+  AND COUNT_STAR > 0
+ORDER BY SUM_TIMER_WAIT DESC
+LIMIT %s

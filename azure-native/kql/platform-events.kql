@@ -1,0 +1,53 @@
+// platform-events.kql — control-plane operations on the server
+//
+// Input:    AzureActivity
+// Consumed by: azure-native/workbooks/
+//
+// AzureActivity is subscription-scoped and arrives independently of the server's own
+// diagnostic setting — it is present even when the server is unreachable, which is exactly
+// when it matters. This is where a restart, failover, scale operation, or a parameter change
+// becomes visible.
+//
+// A counter reset in the Layer 2 collector data (a negative delta in MysqlMetrics) should
+// always be explainable by a row here. If it is not, the server restarted for a reason Azure
+// did not record as an operation, and that is worth investigating rather than smoothing over.
+
+let lookback = 7d;
+AzureActivity
+| where TimeGenerated > ago(lookback)
+| where ResourceProvider == 'MICROSOFT.DBFORMYSQL'
+| project
+    TimeGenerated,
+    OperationNameValue,
+    ActivityStatusValue,
+    ActivitySubstatusValue,
+    Caller,
+    CallerIpAddress,
+    ResourceGroup,
+    Resource = _ResourceId,
+    CorrelationId
+| order by TimeGenerated desc
+| take 200
+
+// --- Restarts and failovers only -------------------------------------------------------
+// Overlay these timestamps as annotations on any dashboard plotting cumulative counters,
+// so a reset reads as an explained event rather than a data-quality problem.
+//
+// AzureActivity
+// | where TimeGenerated > ago(30d)
+// | where ResourceProvider == 'MICROSOFT.DBFORMYSQL'
+// | where OperationNameValue has_any ('restart', 'failover', 'start', 'stop')
+// | where ActivityStatusValue == 'Success'
+// | project TimeGenerated, OperationNameValue, Caller, _ResourceId
+// | order by TimeGenerated desc
+
+// --- Configuration changes -------------------------------------------------------------
+// Server parameter updates change monitoring behaviour itself: switching slow_query_log off
+// empties the slow-log table, which looks exactly like a workload that got faster.
+//
+// AzureActivity
+// | where TimeGenerated > ago(30d)
+// | where ResourceProvider == 'MICROSOFT.DBFORMYSQL'
+// | where OperationNameValue has 'configurations'
+// | project TimeGenerated, OperationNameValue, ActivityStatusValue, Caller, _ResourceId
+// | order by TimeGenerated desc

@@ -1,0 +1,38 @@
+[Unit]
+Description=Azure Database for MySQL monitoring collector
+Documentation=https://github.com/DalBamS/azure-mysql-monitoring
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=mysqlmon
+Group=mysqlmon
+WorkingDirectory=/opt/azure-mysql-monitoring/collector
+EnvironmentFile=/etc/azure-mysql-monitoring/collector.env
+ExecStartPre=/opt/azure-mysql-monitoring/venv/bin/python plan.py /etc/azure-mysql-monitoring/monitoring.yaml
+ExecStart=/opt/azure-mysql-monitoring/venv/bin/python collector.py \
+  --config /etc/azure-mysql-monitoring/monitoring.yaml \
+  --sink adx-resilient \
+  --cursor-dir /var/lib/azure-mysql-monitoring/cursors
+Restart=always
+RestartSec=10s
+TimeoutStopSec=45s
+UMask=0077
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+ReadWritePaths=/var/lib/azure-mysql-monitoring
+StateDirectory=azure-mysql-monitoring
+StateDirectoryMode=0750
+
+[Install]
+WantedBy=multi-user.target

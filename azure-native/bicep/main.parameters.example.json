@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "mysqlServerName": {
+      "value": "REPLACE-with-your-flexible-server-name"
+    },
+    "createWorkspace": {
+      "value": true
+    },
+    "workspaceName": {
+      "value": "REPLACE-with-your-workspace-name"
+    },
+    "existingWorkspaceId": {
+      "value": ""
+    },
+    "retentionInDays": {
+      "value": 30
+    },
+    "dailyQuotaGb": {
+      "value": 0
+    },
+    "deployAlerts": {
+      "value": true
+    },
+    "actionGroupId": {
+      "value": ""
+    },
+    "deployReplicationAlert": {
+      "value": false
+    }
+  }
+}

@@ -1,0 +1,38 @@
+# Secrets / local config — never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+azure-native/bicep/main.parameters.json
+testing/bicep/main.parameters.json
+
+# Test environment output — .env holds a generated MySQL password
+testing/.env
+testing/runs/
+
+# Benchmark run output
+benchmark-integration/runs/
+benchmark-integration/report/
+
+# Collector local state
+mysql-internal/collector/spool/
+mysql-internal/collector/*.jsonl
+mysql-internal/collector/.cursor-state.json
+mysql-internal/collector/*.yaml
+!mysql-internal/collector/*.example.yaml
+
+# ADX / Azure IaC — rendered parameters may contain resource identifiers
+adx/bicep/*.parameters.json
+!adx/bicep/*.parameters.example.json
+
+# Grafana — rendered provisioning may contain expanded secrets
+grafana/provisioning/*.rendered.yaml
+grafana/provisioning/.grafana-data/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+mysql-internal/deployment/bicep/main.parameters.json

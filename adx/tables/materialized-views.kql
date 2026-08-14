@@ -1,0 +1,34 @@
+// materialized-views.kql — 1-minute rollups.
+//
+// Long-range dashboards must not scan every raw point. A materialized view keeps rollups current
+// without a scheduled job, but it follows the same 90-day retention as its source: a rollup is
+// still customer telemetry and must not outlive the requested lifecycle.
+//
+// `backfill` is deliberately absent. ADX accepts it only on creation and rejects it on the
+// alter path, so a `.create-or-alter` carrying it succeeds once and then fails on every
+// re-run — which breaks bootstrap_adx.py's idempotency. The views are created alongside their
+// empty source tables, so there is nothing to backfill. Backfilling an already-populated table
+// is a deliberate one-off:
+//
+//   .create materialized-view with (backfill=true) MysqlMetrics1m on table MysqlMetrics { ... }
+
+.create-or-alter materialized-view with (docstring="1-minute rollup of MysqlMetrics for long-range dashboards")
+    MysqlMetrics1m on table MysqlMetrics
+{
+    MysqlMetrics
+    | summarize
+        Avg     = avg(Value),
+        Max     = max(Value),
+        Min     = min(Value),
+        Samples = count()
+      by bin(Timestamp, 1m), RunId, Host, Tier, Metric
+}
+
+// Events are low-volume text, so they are not rolled up. This view instead gives dashboards
+// a cheap error-rate series without scanning message bodies.
+.create-or-alter materialized-view with (docstring="1-minute error/warning counts by subsystem")
+    MysqlEvents1m on table MysqlEvents
+{
+    MysqlEvents
+    | summarize Events = count() by bin(Timestamp, 1m), RunId, Host, Tier, Level, Subsystem
+}

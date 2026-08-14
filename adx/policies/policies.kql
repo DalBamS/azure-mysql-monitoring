@@ -1,0 +1,88 @@
+// policies.kql — streaming ingestion, batching, retention and caching.
+//
+// Applied after the tables exist. Streaming ingestion must ALSO be enabled on the cluster
+// itself (enableStreamingIngest: true in testing/bicep/modules/adx.bicep); the table-level
+// policy below is necessary but not sufficient.
+
+// ---------------------------------------------------------------------------
+// Streaming ingestion — the hot path
+// ---------------------------------------------------------------------------
+// Without this, every row waits for the queued batching window and "real-time" monitoring
+// is 5 minutes late. Shrinking the batching policy instead is the wrong fix: it produces
+// thousands of tiny extents and degrades the cluster.
+
+.alter table MysqlMetrics policy streamingingestion enable
+.alter table MysqlEvents  policy streamingingestion enable
+.alter table MysqlTelemetry    policy streamingingestion enable
+.alter table MysqlMetricSeries policy streamingingestion enable
+
+// ---------------------------------------------------------------------------
+// Batching — the cold path (JSONL replay, backfill, benchmark upload)
+// ---------------------------------------------------------------------------
+// Kept moderate rather than minimal. The cold path does not need low latency, and larger
+// batches produce healthier extents.
+
+.alter table MysqlMetrics policy ingestionbatching
+```
+{
+  "MaximumBatchingTimeSpan": "00:01:00",
+  "MaximumNumberOfItems": 500,
+  "MaximumRawDataSizeMB": 1024
+}
+```
+
+.alter table MysqlEvents policy ingestionbatching
+```
+{
+  "MaximumBatchingTimeSpan": "00:01:00",
+  "MaximumNumberOfItems": 500,
+  "MaximumRawDataSizeMB": 1024
+}
+```
+
+.alter table MysqlTelemetry policy ingestionbatching
+```
+{
+  "MaximumBatchingTimeSpan": "00:01:00",
+  "MaximumNumberOfItems": 500,
+  "MaximumRawDataSizeMB": 1024
+}
+```
+
+.alter table MysqlMetricSeries policy ingestionbatching
+```
+{
+  "MaximumBatchingTimeSpan": "00:01:00",
+  "MaximumNumberOfItems": 1000,
+  "MaximumRawDataSizeMB": 1024
+}
+```
+
+// ---------------------------------------------------------------------------
+// Retention — one 90-day lifecycle
+// ---------------------------------------------------------------------------
+// The product requirement applies to every representation, not just raw rows. A materialized
+// view is still customer telemetry, so keeping it after its source expires would violate the
+// same lifecycle while giving operators an incomplete picture of the older window.
+
+.alter-merge table MysqlMetrics policy retention softdelete = 90d recoverability = disabled
+.alter-merge table MysqlEvents  policy retention softdelete = 90d recoverability = disabled
+.alter-merge table MysqlTelemetry    policy retention softdelete = 90d recoverability = disabled
+.alter-merge table MysqlMetricSeries policy retention softdelete = 90d recoverability = disabled
+
+.alter-merge materialized-view MysqlMetrics1m policy retention softdelete = 90d recoverability = disabled
+.alter-merge materialized-view MysqlEvents1m  policy retention softdelete = 90d recoverability = disabled
+
+// ---------------------------------------------------------------------------
+// Caching (hot cache) — what lives on SSD rather than in cold storage
+// ---------------------------------------------------------------------------
+// Only the window dashboards actually query at 10-second refresh needs to be hot. Caching
+// everything is the single easiest way to overspend on an ADX cluster.
+
+.alter table MysqlMetrics policy caching hot = 7d
+.alter table MysqlEvents  policy caching hot = 14d
+.alter table MysqlTelemetry    policy caching hot = 7d
+.alter table MysqlMetricSeries policy caching hot = 14d
+
+.alter materialized-view MysqlMetrics1m policy caching hot = 90d
+.alter materialized-view MysqlEvents1m  policy caching hot = 90d

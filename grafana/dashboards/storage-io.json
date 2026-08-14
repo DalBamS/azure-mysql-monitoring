@@ -1,0 +1,169 @@
+{
+  "uid": "mysqlmon-storage-io",
+  "title": "MySQL 8.4 — Storage IO",
+  "description": "Answers whether storage is limiting the workload: engine-visible file IOPS, throughput, per-operation latency and redo-log pressure. Values come from performance_schema file summaries, not Azure platform estimates.",
+  "tags": ["mysql", "storage", "production"],
+  "timezone": "utc",
+  "editable": false,
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "run_id",
+        "label": "Run ID",
+        "type": "query",
+        "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+        "query": {
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "table",
+          "query": "MysqlTelemetry | where RunId != 'verify-probe' | summarize LastSeen=max(Timestamp) by RunId | order by LastSeen desc | project RunId"
+        },
+        "refresh": 1,
+        "includeAll": false,
+        "multi": false
+      },
+      {
+        "name": "target_id",
+        "label": "Target",
+        "type": "query",
+        "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+        "query": {
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "table",
+          "query": "MysqlTelemetry | where RunId == '$run_id' and TargetId != 'verify-probe' | summarize by TargetId | order by TargetId asc"
+        },
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Read IOPS",
+      "description": "Physical file read operations per second, summed across instrumented MySQL file classes.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": { "defaults": { "unit": "iops", "custom": { "fillOpacity": 15, "showPoints": "never" } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "time_series",
+          "query": "MetricSeriesRate('mysql.file_io', 'operations_total', '$run_id', $__timeFrom, $__timeTo)\n| where TargetId in ($target_id) and tostring(Tags.mode) == 'read'\n| summarize IOPS=sum(Rate) by Timestamp, TargetId\n| order by Timestamp asc"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Write IOPS",
+      "description": "Physical file write operations per second, summed across instrumented MySQL file classes.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": { "defaults": { "unit": "iops", "custom": { "fillOpacity": 15, "showPoints": "never" } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "time_series",
+          "query": "MetricSeriesRate('mysql.file_io', 'operations_total', '$run_id', $__timeFrom, $__timeTo)\n| where TargetId in ($target_id) and tostring(Tags.mode) == 'write'\n| summarize IOPS=sum(Rate) by Timestamp, TargetId\n| order by Timestamp asc"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "File throughput",
+      "description": "Bytes per second read and written by instrumented MySQL file classes.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": { "defaults": { "unit": "Bps", "custom": { "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "time_series",
+          "query": "MetricSeriesRate('mysql.file_io', 'bytes_total', '$run_id', $__timeFrom, $__timeTo)\n| where TargetId in ($target_id) and tostring(Tags.mode) in ('read', 'write')\n| summarize BytesPerSecond=sum(Rate) by Timestamp, TargetId, Mode=tostring(Tags.mode)\n| extend Series=strcat(TargetId, ' / ', Mode)\n| project Timestamp, Series, BytesPerSecond\n| order by Timestamp asc"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "File latency per operation",
+      "description": "Cumulative file wait delta divided by operation delta. This is engine-observed latency and is the primary storage-tier diagnostic.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": { "defaults": { "unit": "ms", "custom": { "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "time_series",
+          "query": "let operations = MetricSeriesRate('mysql.file_io', 'operations_total', '$run_id', $__timeFrom, $__timeTo)\n| project Timestamp, TargetId, SeriesKey, Mode=tostring(Tags.mode), Operations=Rate;\nlet waits = MetricSeriesRate('mysql.file_io', 'wait_ms_total', '$run_id', $__timeFrom, $__timeTo)\n| project Timestamp, TargetId, SeriesKey, WaitMs=Rate;\noperations\n| where TargetId in ($target_id) and Mode in ('read', 'write')\n| join kind=inner waits on Timestamp, TargetId, SeriesKey\n| summarize Operations=sum(Operations), WaitMs=sum(WaitMs) by Timestamp, TargetId, Mode\n| where Operations > 0\n| extend LatencyMs=WaitMs / Operations, Series=strcat(TargetId, ' / ', Mode)\n| project Timestamp, Series, LatencyMs\n| order by Timestamp asc"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Redo log waits",
+      "description": "Innodb_log_waits per second. Any sustained non-zero rate means transactions are waiting for redo capacity or flush progress.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "fillOpacity": 20, "showPoints": "auto" } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "time_series",
+          "query": "MetricSeriesRate('mysql.global_status', 'Innodb_log_waits', '$run_id', $__timeFrom, $__timeTo)\n| where TargetId in ($target_id)\n| project Timestamp, TargetId, WaitsPerSecond=Rate\n| order by Timestamp asc"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "File classes by workload and latency",
+      "description": "Ranks bounded performance_schema file event classes. High IOPS with low latency is healthy throughput; low IOPS with high latency points to storage or flush contention.",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 16 },
+      "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-data-explorer-datasource", "uid": "mysqlmon-adx" },
+          "database": "${ADX_DATABASE}",
+          "querySource": "raw",
+          "rawMode": true,
+          "resultFormat": "table",
+          "query": "let operations = MetricSeriesRate('mysql.file_io', 'operations_total', '$run_id', $__timeFrom, $__timeTo)\n| where TargetId in ($target_id)\n| summarize IOPS=avg(Rate), Operations=sum(Delta) by TargetId, SeriesKey, Event=tostring(Tags.event), Mode=tostring(Tags.mode);\nlet waits = MetricSeriesRate('mysql.file_io', 'wait_ms_total', '$run_id', $__timeFrom, $__timeTo)\n| where TargetId in ($target_id)\n| summarize WaitMs=sum(Delta) by TargetId, SeriesKey;\noperations\n| join kind=inner waits on TargetId, SeriesKey\n| extend AvgLatencyMs=iff(Operations > 0, WaitMs / Operations, 0.0)\n| order by WaitMs desc\n| project TargetId, Event, Mode, IOPS=round(IOPS, 2), AvgLatencyMs=round(AvgLatencyMs, 3), Operations\n| take 100"
+        }
+      ]
+    }
+  ]
+}
